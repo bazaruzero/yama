@@ -1,0 +1,25 @@
+# Build output
+bin/
+
+# Runtime data (BadgerDB data directory)
+data/
+
+# Logs
+*.log
+
+# Local runtime configs (examples live in configs/)
+config.yaml
+metrics.yaml
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Go
+# (go.sum is tracked; nothing else to ignore)
+
+# OpenCode / OpenSpec tooling dependencies
+.opencode/node_modules/

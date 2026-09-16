@@ -1,0 +1,18 @@
+# Agent configuration — copy to config.yaml and edit.
+postgres:
+  host: "localhost"
+  port: 5432
+  database: "postgres"
+  user: "yama"
+  # password: ""        # or set PG_PASSWORD in the environment
+  sslmode: "prefer"
+
+collector:
+  interval: 10s         # global collection interval (per-metric override in metrics.yaml)
+  query_timeout: 3s
+
+storage:
+  data_dir: "./data"
+
+api:
+  listen: ":8080"

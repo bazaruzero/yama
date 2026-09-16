@@ -1,0 +1,9 @@
+# Metrics configuration — copy to metrics.yaml and edit.
+# The select_1 metric verifies the full collection pipeline against any
+# reachable PostgreSQL. Add your own metrics below — no code changes needed.
+metrics:
+  - name: select_1
+    query: "SELECT 1"
+    type: gauge
+    # interval: 5s      # optional per-metric override of collector.interval
+    # enabled: false    # optional; default is enabled
