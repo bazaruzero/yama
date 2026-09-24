@@ -28,9 +28,9 @@ func NewCollector(q Querier, st store.Store, timeout time.Duration) *Collector {
 	return &Collector{q: q, st: st, timeout: timeout}
 }
 
-// CollectOnce executes the metric's query once and stores the data point.
-// The timestamp is recorded in UTC.
-func (c *Collector) CollectOnce(ctx context.Context, m config.Metric) error {
+// CollectOnce executes the metric's query once and stores the data point
+// stamped with ts (the cycle start time shared by all metrics in a cycle).
+func (c *Collector) CollectOnce(ctx context.Context, m config.Metric, ts time.Time) error {
 	runCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	v, err := c.q.QueryValue(runCtx, m.Query)
@@ -41,7 +41,7 @@ func (c *Collector) CollectOnce(ctx context.Context, m config.Metric) error {
 		Name:      m.Name,
 		Type:      string(m.Type),
 		Value:     v,
-		Timestamp: time.Now().UTC(),
+		Timestamp: ts.UTC(),
 	}
 	if err := c.st.Write(p); err != nil {
 		return fmt.Errorf("metric %q: store: %w", m.Name, err)

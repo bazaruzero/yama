@@ -1,8 +1,4 @@
-## Purpose
-
-Defines how the agent loads and validates its two YAML configuration files (agent config and metrics config) so that misconfiguration fails fast at startup with a clear error instead of causing runtime surprises.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Agent configuration file
 The system SHALL load an agent configuration file in YAML format containing at minimum: the PostgreSQL connection fields for the monitored database (`host` and `user` are required; `port` defaults to 5432, `database` defaults to `postgres`, `password` is optional and MAY be supplied via the `PG_PASSWORD` environment variable, `sslmode` defaults to `prefer`, `max_db_connections` is optional and defaults to 1 and SHALL be an integer of at least 1), the global metric collection interval, the data directory for local storage, and the HTTP listen address for the API. The system SHALL apply documented defaults for every optional field. If `max_db_connections` is explicitly set to a value less than 1 (including 0), the system SHALL exit with a non-zero status and an error naming the field.
@@ -34,29 +30,3 @@ The system SHALL load an agent configuration file in YAML format containing at m
 #### Scenario: Invalid max_db_connections
 - **WHEN** the agent config sets `postgres.max_db_connections` to 0 or a negative number
 - **THEN** the agent exits with a non-zero status and an error message naming `postgres.max_db_connections` and the minimum value of 1
-
-### Requirement: Metrics configuration file
-The system SHALL load a separate metrics configuration file in YAML format defining the metrics to collect. Each metric definition SHALL include: a unique name, the SQL query to execute, and the metric type (`counter` or `gauge`). Each metric MAY declare an enabled flag (default enabled) and a per-metric collection interval.
-
-#### Scenario: Metric with all fields
-- **WHEN** the metrics config defines a metric with name, query, type `gauge`, and a custom interval
-- **THEN** that metric is registered for collection at its custom interval
-
-#### Scenario: Unknown metric type rejected
-- **WHEN** a metric definition uses a type other than `counter` or `gauge`
-- **THEN** the agent exits with a non-zero status and an error naming the offending metric
-
-#### Scenario: Duplicate metric names rejected
-- **WHEN** two metric definitions share the same name
-- **THEN** the agent exits with a non-zero status and an error naming the duplicate
-
-### Requirement: Per-metric interval override
-The effective collection interval of a metric SHALL be its own configured interval when present, and the global collection interval from the agent config otherwise.
-
-#### Scenario: Metric without explicit interval
-- **WHEN** a metric definition omits the interval field and the global interval is 10 seconds
-- **THEN** the metric is scheduled for collection every 10 seconds
-
-#### Scenario: Metric with explicit interval
-- **WHEN** a metric definition sets an interval of 30 seconds and the global interval is 10 seconds
-- **THEN** the metric is scheduled for collection every 30 seconds

@@ -19,6 +19,18 @@ type PostgresConfig struct {
 	User     string `yaml:"user"`
 	Password string `yaml:"password"`
 	SSLMode  string `yaml:"sslmode"`
+	// MaxDBConnections caps the number of concurrent PostgreSQL connections.
+	// nil means unset (defaults to 1); an explicit value below 1 is rejected.
+	MaxDBConnections *int `yaml:"max_db_connections"`
+}
+
+// EffectiveMaxDBConnections returns the resolved connection ceiling,
+// defaulting to 1 when max_db_connections is not set.
+func (p PostgresConfig) EffectiveMaxDBConnections() int {
+	if p.MaxDBConnections == nil {
+		return 1
+	}
+	return *p.MaxDBConnections
 }
 
 // CollectorConfig holds scheduling and query execution settings.
@@ -74,6 +86,9 @@ func LoadAgent(path string) (*AgentConfig, error) {
 	}
 	if cfg.Postgres.User == "" {
 		return nil, fmt.Errorf("agent config %q: postgres.user is required", path)
+	}
+	if cfg.Postgres.MaxDBConnections != nil && *cfg.Postgres.MaxDBConnections < 1 {
+		return nil, fmt.Errorf("agent config %q: postgres.max_db_connections must be at least 1, got %d", path, *cfg.Postgres.MaxDBConnections)
 	}
 	if cfg.Postgres.Port == 0 {
 		cfg.Postgres.Port = defaultPort

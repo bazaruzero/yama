@@ -19,15 +19,32 @@ type Pool struct {
 	pool *pgxpool.Pool
 }
 
-// Open builds a connection pool from the structured config fields and
-// verifies connectivity with a ping bounded by timeout.
+// buildPoolConfig parses the connection string into a pgxpool config with
+// the connection ceiling set to maxConns. Connections open lazily (MinConns
+// stays 0); maxConns is a ceiling, not a preallocation.
+func buildPoolConfig(connStr string, maxConns int) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(connStr)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: invalid connection config: %w", err)
+	}
+	cfg.MaxConns = int32(maxConns)
+	return cfg, nil
+}
+
+// Open builds a connection pool from the structured config fields, capping
+// concurrent connections at cfg.MaxDBConnections (default 1), and verifies
+// connectivity with a ping bounded by timeout.
 func Open(ctx context.Context, cfg config.PostgresConfig, timeout time.Duration) (*Pool, error) {
 	connStr := fmt.Sprintf("host=%s port=%d user=%s dbname=%s sslmode=%s",
 		cfg.Host, cfg.Port, cfg.User, cfg.Database, cfg.SSLMode)
 	if cfg.Password != "" {
 		connStr += " password=" + quoteConnValue(cfg.Password)
 	}
-	pool, err := pgxpool.New(ctx, connStr)
+	poolCfg, err := buildPoolConfig(connStr, cfg.EffectiveMaxDBConnections())
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: invalid connection config: %w", err)
 	}

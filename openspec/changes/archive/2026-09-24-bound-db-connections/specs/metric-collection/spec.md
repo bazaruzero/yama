@@ -1,19 +1,4 @@
-## Purpose
-
-Defines how the agent connects to the monitored PostgreSQL database and executes configured metric queries on independent schedules, producing typed, timestamped data points without ever crashing on query errors.
-
-## Requirements
-
-### Requirement: PostgreSQL connectivity
-The system SHALL connect to the monitored PostgreSQL instance using the connection fields (host, port, database, user, password, sslmode) from the agent config at startup, and SHALL verify connectivity before starting collection.
-
-#### Scenario: Successful connection
-- **WHEN** the agent starts with a reachable PostgreSQL and valid credentials
-- **THEN** the agent establishes the connection and begins scheduled collection
-
-#### Scenario: Unreachable database
-- **WHEN** PostgreSQL is unreachable or credentials are invalid at startup
-- **THEN** the agent exits with a non-zero status and an error describing the connection failure
+## MODIFIED Requirements
 
 ### Requirement: Scheduled collection
 The system SHALL organize collection into cycles driven by the global collection interval: at each cycle wake at time X the agent SHALL determine every enabled metric that is due (time since the metric's last collection is at least its effective interval) and collect all of them within that cycle. Disabled metrics SHALL NOT be executed. Within a cycle, collections SHALL be executed over at most `max_db_connections` (default 1) concurrent connections; with the default of 1 the cycle executes metrics one by one in configuration order.
@@ -55,36 +40,3 @@ When a metric's collection from a previous cycle is still queued or executing at
 #### Scenario: No duplicate queueing under contention
 - **WHEN** a metric's collection job is still queued or running and a later cycle in which it is due fires
 - **THEN** no duplicate collection is enqueued for that metric, and its following collection occurs on a subsequent due cycle
-
-### Requirement: Data point production
-Each successful query execution SHALL produce a data point containing: the metric name, the metric type, the numeric value returned by the query, and the collection timestamp in UTC. A query MUST return exactly one row with one numeric column to produce a data point.
-
-#### Scenario: Successful collection
-- **WHEN** a metric query executes successfully and returns one numeric value
-- **THEN** a data point with the metric name, type, value, and current UTC timestamp is passed to storage
-
-#### Scenario: Query failure does not stop collection
-- **WHEN** a metric query fails (SQL error, timeout, or lost connection)
-- **THEN** the failure is logged with the metric name and reason, no data point is produced for that run, and future scheduled executions of that and other metrics continue
-
-#### Scenario: Unexpected result shape
-- **WHEN** a metric query returns zero rows, multiple rows, or a non-numeric value
-- **THEN** the run is treated as a query failure for that metric
-
-### Requirement: Built-in connectivity test metric
-The system SHALL provide a built-in test metric whose query is `SELECT 1`, so a fresh deployment can verify the full collection pipeline against any reachable PostgreSQL without authoring custom SQL.
-
-#### Scenario: Default test metric collected
-- **WHEN** the agent runs with the default test metric enabled
-- **THEN** data points with value 1 are produced and stored at the configured interval
-
-### Requirement: Graceful shutdown
-On receiving SIGINT or SIGTERM the system SHALL stop scheduling new collections, allow in-flight queries a bounded time to finish, and then shut down cleanly.
-
-#### Scenario: Signal received during idle period
-- **WHEN** the agent receives SIGTERM while no query is in flight
-- **THEN** it shuts down promptly with exit code 0
-
-#### Scenario: Signal received mid-query
-- **WHEN** the agent receives SIGINT while a query is executing
-- **THEN** the in-flight query is allowed to complete or is cancelled after a bounded timeout, and the agent exits cleanly

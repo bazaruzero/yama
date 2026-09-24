@@ -60,14 +60,16 @@ func run() error {
 		return err
 	}
 	defer pool.Close()
+	maxConns := cfg.Postgres.EffectiveMaxDBConnections()
 	log.Info("connected to PostgreSQL",
-		"host", cfg.Postgres.Host, "port", cfg.Postgres.Port, "database", cfg.Postgres.Database)
+		"host", cfg.Postgres.Host, "port", cfg.Postgres.Port, "database", cfg.Postgres.Database,
+		"max_db_connections", maxConns)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	collector := collect.NewCollector(pool, st, cfg.Collector.QueryTimeout.Duration)
-	scheduler := collect.NewScheduler(collector, mcfg.Metrics, cfg.Collector.Interval.Duration, log)
+	scheduler := collect.NewScheduler(collector, mcfg.Metrics, cfg.Collector.Interval.Duration, maxConns, log)
 	schedDone := make(chan struct{})
 	go func() {
 		defer close(schedDone)

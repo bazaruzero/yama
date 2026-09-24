@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -174,5 +176,56 @@ collector:
 	}
 	if cfg.Collector.Interval.Duration != 20*time.Second {
 		t.Errorf("integer seconds: got %s", cfg.Collector.Interval.Duration)
+	}
+}
+
+func TestMaxDBConnectionsDefaultIsOne(t *testing.T) {
+	path := writeTemp(t, "postgres:\n  host: h\n  user: u\n")
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Postgres.MaxDBConnections != nil {
+		t.Errorf("unset field should stay nil, got %d", *cfg.Postgres.MaxDBConnections)
+	}
+	if got := cfg.Postgres.EffectiveMaxDBConnections(); got != 1 {
+		t.Errorf("effective default: got %d, want 1", got)
+	}
+}
+
+func TestMaxDBConnectionsExplicitValues(t *testing.T) {
+	for _, v := range []int{1, 5} {
+		path := writeTemp(t, fmt.Sprintf("postgres:\n  host: h\n  user: u\n  max_db_connections: %d\n", v))
+		cfg, err := LoadAgent(path)
+		if err != nil {
+			t.Fatalf("max_db_connections=%d: unexpected error: %v", v, err)
+		}
+		if got := cfg.Postgres.EffectiveMaxDBConnections(); got != v {
+			t.Errorf("max_db_connections=%d: effective got %d", v, got)
+		}
+	}
+}
+
+func TestMaxDBConnectionsInvalidValues(t *testing.T) {
+	for _, v := range []int{0, -3} {
+		path := writeTemp(t, fmt.Sprintf("postgres:\n  host: h\n  user: u\n  max_db_connections: %d\n", v))
+		_, err := LoadAgent(path)
+		if err == nil {
+			t.Fatalf("max_db_connections=%d: expected error", v)
+		}
+		if !strings.Contains(err.Error(), "postgres.max_db_connections") {
+			t.Errorf("max_db_connections=%d: error does not name the field: %v", v, err)
+		}
+	}
+}
+
+func TestExampleConfigLoads(t *testing.T) {
+	path := filepath.Join("..", "..", "configs", "config.yaml.example")
+	cfg, err := LoadAgent(path)
+	if err != nil {
+		t.Fatalf("example config failed to load: %v", err)
+	}
+	if got := cfg.Postgres.EffectiveMaxDBConnections(); got != 1 {
+		t.Errorf("example config effective max connections: got %d, want 1", got)
 	}
 }

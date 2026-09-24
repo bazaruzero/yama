@@ -37,6 +37,12 @@ Edit `config.yaml` — set at minimum `postgres.host` and `postgres.user`.
 The password can be left empty and supplied via the `PG_PASSWORD`
 environment variable.
 
+By default the agent uses at most **1** concurrent PostgreSQL connection
+(`postgres.max_db_connections`, minimum 1): all metric collections run
+serially over it. Raise it only if the monitored instance can afford more
+connections — as a rule of thumb, pick `N` so that the total query time of
+one collection cycle comfortably fits within your shortest interval.
+
 ### 3. Run
 
 ```
@@ -57,6 +63,30 @@ window (`from` defaults to now − 3h, `to` defaults to now).
 ### 5. Stop
 
 `Ctrl+C` or `kill -TERM <pid>` — the agent drains and exits cleanly.
+
+## How collection is scheduled
+
+Collection runs in cycles driven by `collector.interval`: the agent wakes,
+determines every metric whose time since last collection has reached its
+effective interval (its own `interval` override, else the global one), and
+collects them all within that cycle — sequentially when
+`postgres.max_db_connections` is 1 (the default), or up to that many at a
+time otherwise. Every data point in a cycle carries the **same timestamp**:
+the cycle wake time, so series stay aligned even when a cycle takes long to
+drain.
+
+Per-metric intervals interact with cycles as follows:
+
+- The scheduler wakes exactly when the earliest metric is next due (a timer
+  set to `last collection + effective interval`), so each metric is
+  collected at approximately its own cadence. A **shorter** per-metric
+  interval (e.g. 1s inside a 5s global) is collected every ~1s while global
+  metrics stay on the 5s cadence.
+- A **longer** per-metric interval (e.g. 30s inside a 5s global) collects
+  only when due — every 30s — with no redundant work.
+- If a metric's previous collection is still running when it comes due
+  again, that cycle is skipped (no queue pile-up) and it resumes on its
+  next due cycle.
 
 ## Adding Metrics
 
