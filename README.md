@@ -52,13 +52,40 @@ export PG_PASSWORD="your-password"
 
 ### 4. Query collected data
 
+All requests return a JSON array of `{"timestamp":"...","value":...}` points
+ordered by timestamp ascending; a metric with no points in the window
+returns `[]`.
+
+Last 3 hours up to now (the default window):
+
 ```
 curl "http://localhost:8080/api/v1/metrics/select_1/data"
 ```
 
-Returns a JSON array of `{"timestamp":"...","value":...}` points for the
-last 3 hours. Optional `from`/`to` RFC3339 query parameters adjust the
-window (`from` defaults to now − 3h, `to` defaults to now).
+A specific time period via `from`/`to` (RFC3339 timestamps, both inclusive;
+`to` defaults to now when omitted):
+
+```
+curl "http://localhost:8080/api/v1/metrics/select_1/data?from=2026-09-24T10:00:00Z&to=2026-09-24T11:00:00Z"
+```
+
+From a fixed point until now:
+
+```
+curl "http://localhost:8080/api/v1/metrics/select_1/data?from=2026-09-24T10:30:00Z"
+```
+
+Example response:
+
+```json
+[
+  {"timestamp":"2026-09-24T10:00:05.123456789Z","value":1},
+  {"timestamp":"2026-09-24T10:00:15.123501002Z","value":1}
+]
+```
+
+Unparseable `from`/`to` values return `400 Bad Request` with a JSON error
+naming the invalid parameter; non-GET methods return `405 Method Not Allowed`.
 
 ### 5. Stop
 
@@ -101,6 +128,25 @@ metrics:
 ```
 
 Restart YAMA to apply changes.
+
+### Metric types
+
+Each metric declares one of two types via the `type` field (anything else
+is rejected at startup):
+
+| Type | Meaning | Typical use |
+|---|---|---|
+| `gauge` | A point-in-time value that can go up or down | session counts, table sizes, replication lag |
+| `counter` | A cumulative, monotonically increasing value | `pg_stat_*` totals such as transactions or tuples read |
+
+Notes:
+
+- The query MUST return exactly **one row with one numeric column** — that
+  value is stored as the data point (raw, for both types; rate/delta
+  computation over counters is not performed by the agent).
+- Every point of one collection cycle shares the cycle timestamp (see
+  [How collection is scheduled](#how-collection-is-scheduled)), regardless
+  of metric type.
 
 ## Development
 
