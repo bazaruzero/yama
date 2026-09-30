@@ -25,7 +25,7 @@ type fakeQuerier struct {
 	maxAct int64
 }
 
-func (f *fakeQuerier) QueryValue(_ context.Context, _ string) (float64, error) {
+func (f *fakeQuerier) QueryValue(ctx context.Context, _ string) (float64, error) {
 	cur := atomic.AddInt64(&f.active, 1)
 	for {
 		max := atomic.LoadInt64(&f.maxAct)
@@ -33,13 +33,19 @@ func (f *fakeQuerier) QueryValue(_ context.Context, _ string) (float64, error) {
 			break
 		}
 	}
+	defer atomic.AddInt64(&f.active, -1)
 	if f.sleep > 0 {
-		time.Sleep(f.sleep)
+		timer := time.NewTimer(f.sleep)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
 	}
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
-	atomic.AddInt64(&f.active, -1)
 	return f.value, f.err
 }
 
@@ -199,6 +205,76 @@ func TestSchedulerQueryErrorDoesNotStopCollection(t *testing.T) {
 
 	if n := q.callCount(); n < 3 {
 		t.Errorf("failing metric ran %d times, want >= 3 (collection must continue)", n)
+	}
+}
+
+// TestCollectOncePerMetricQueryTimeout (per-metric query_timeout change): a
+// 150ms query under a 50ms global fallback deadline — (a) a raised override
+// lets it finish and store a point; (b) a tightened override cuts it off with
+// no point; (c) without an override the constructor's global timeout decides
+// (50ms fails, 1s succeeds).
+func TestCollectOncePerMetricQueryTimeout(t *testing.T) {
+	newStore := func(t *testing.T) store.Store {
+		t.Helper()
+		st, err := store.OpenBadgerInMemory()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		return st
+	}
+	ts := time.Now().UTC()
+
+	// (a) raised override: 500ms effective deadline vs 150ms query — succeeds.
+	st := newStore(t)
+	q := &fakeQuerier{value: 1, sleep: 150 * time.Millisecond}
+	c := NewCollector(q, st, 50*time.Millisecond)
+	raised := config.Metric{
+		Name: "raised", Query: "SELECT 1", Type: config.MetricTypeGauge,
+		QueryTimeout: config.Duration{Duration: 500 * time.Millisecond},
+	}
+	if err := c.CollectOnce(context.Background(), raised, ts); err != nil {
+		t.Fatalf("raised override should succeed: %v", err)
+	}
+	pts, err := st.Query("raised", ts.Add(-time.Minute), ts.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pts) != 1 {
+		t.Errorf("raised override stored %d points, want 1", len(pts))
+	}
+
+	// (b) tightened override: 50ms effective deadline vs 150ms query — fails.
+	st2 := newStore(t)
+	q2 := &fakeQuerier{value: 1, sleep: 150 * time.Millisecond}
+	c2 := NewCollector(q2, st2, time.Second)
+	tight := config.Metric{
+		Name: "tight", Query: "SELECT 1", Type: config.MetricTypeGauge,
+		QueryTimeout: config.Duration{Duration: 50 * time.Millisecond},
+	}
+	if err := c2.CollectOnce(context.Background(), tight, ts); err == nil {
+		t.Fatal("tightened override should fail the run")
+	}
+	pts2, err := st2.Query("tight", ts.Add(-time.Minute), ts.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pts2) != 0 {
+		t.Errorf("tightened override stored %d points, want 0", len(pts2))
+	}
+
+	// (c) no override: falls back to the constructor's global timeout.
+	st3 := newStore(t)
+	q3 := &fakeQuerier{value: 1, sleep: 150 * time.Millisecond}
+	cShort := NewCollector(q3, st3, 50*time.Millisecond)
+	if err := cShort.CollectOnce(context.Background(), metric("fallback_short", config.MetricTypeGauge), ts); err == nil {
+		t.Error("50ms global fallback should fail a 150ms query")
+	}
+	st4 := newStore(t)
+	q4 := &fakeQuerier{value: 1, sleep: 150 * time.Millisecond}
+	cLong := NewCollector(q4, st4, time.Second)
+	if err := cLong.CollectOnce(context.Background(), metric("fallback_long", config.MetricTypeGauge), ts); err != nil {
+		t.Errorf("1s global fallback should let a 150ms query finish: %v", err)
 	}
 }
 

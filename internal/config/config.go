@@ -108,6 +108,9 @@ func LoadAgent(path string) (*AgentConfig, error) {
 	if cfg.Collector.QueryTimeout.Duration == 0 {
 		cfg.Collector.QueryTimeout = Duration{defaultQueryTimeout}
 	}
+	if cfg.Collector.QueryTimeout.Duration > cfg.Collector.Interval.Duration {
+		return nil, fmt.Errorf("agent config %q: collector.query_timeout %s exceeds collector.interval %s", path, cfg.Collector.QueryTimeout.Duration, cfg.Collector.Interval.Duration)
+	}
 	if cfg.Storage.DataDir == "" {
 		cfg.Storage.DataDir = defaultDataDir
 	}
@@ -127,11 +130,12 @@ const (
 
 // Metric is a single metric definition from the metrics configuration file.
 type Metric struct {
-	Name     string     `yaml:"name"`
-	Query    string     `yaml:"query"`
-	Type     MetricType `yaml:"type"`
-	Enabled  *bool      `yaml:"enabled"`
-	Interval Duration   `yaml:"interval"`
+	Name         string     `yaml:"name"`
+	Query        string     `yaml:"query"`
+	Type         MetricType `yaml:"type"`
+	Enabled      *bool      `yaml:"enabled"`
+	Interval     Duration   `yaml:"interval"`
+	QueryTimeout Duration   `yaml:"query_timeout"`
 }
 
 // IsEnabled reports whether the metric should be collected (default true).
@@ -148,9 +152,44 @@ func (m Metric) EffectiveInterval(global time.Duration) time.Duration {
 	return global
 }
 
+// EffectiveQueryTimeout returns the metric's own query timeout when set,
+// otherwise the global query timeout.
+func (m Metric) EffectiveQueryTimeout(global time.Duration) time.Duration {
+	if m.QueryTimeout.Duration > 0 {
+		return m.QueryTimeout.Duration
+	}
+	return global
+}
+
 // MetricsConfig is the root of the metrics configuration file.
 type MetricsConfig struct {
 	Metrics []Metric `yaml:"metrics"`
+}
+
+// effectiveWithSource resolves a metric duration against its global fallback,
+// reporting which side won ("metric <own>" or "global <fallback>").
+func effectiveWithSource(own, global time.Duration, ownLabel, globalLabel string) (time.Duration, string) {
+	if own > 0 {
+		return own, "metric " + ownLabel
+	}
+	return global, "global " + globalLabel
+}
+
+// ValidateQueryTimeouts enforces the strict invariant that no metric's
+// effective query timeout exceeds its effective collection interval,
+// combining per-metric overrides with the agent config's global values.
+// It reports the first violating metric with both effective values and
+// their sources.
+func ValidateQueryTimeouts(agent *AgentConfig, mcfg *MetricsConfig) error {
+	for _, m := range mcfg.Metrics {
+		timeout, timeoutSrc := effectiveWithSource(m.QueryTimeout.Duration, agent.Collector.QueryTimeout.Duration, "query_timeout", "collector.query_timeout")
+		interval, intervalSrc := effectiveWithSource(m.Interval.Duration, agent.Collector.Interval.Duration, "interval", "collector.interval")
+		if timeout > interval {
+			return fmt.Errorf("metrics config: metric %q: effective query_timeout %s (%s) exceeds effective interval %s (%s)",
+				m.Name, timeout, timeoutSrc, interval, intervalSrc)
+		}
+	}
+	return nil
 }
 
 // LoadMetrics reads and validates the metrics configuration file.
@@ -181,6 +220,9 @@ func LoadMetrics(path string) (*MetricsConfig, error) {
 		case MetricTypeCounter, MetricTypeGauge:
 		default:
 			return nil, fmt.Errorf("metrics config %q: metric %q has unknown type %q (must be counter or gauge)", path, m.Name, m.Type)
+		}
+		if m.QueryTimeout.Duration < 0 {
+			return nil, fmt.Errorf("metrics config %q: metric %q has negative query_timeout %s", path, m.Name, m.QueryTimeout.Duration)
 		}
 	}
 	return &cfg, nil

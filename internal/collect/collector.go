@@ -18,20 +18,22 @@ type Querier interface {
 // Collector executes one metric query per run and persists the result.
 // A run only counts as successful once its point is stored.
 type Collector struct {
-	q       Querier
-	st      store.Store
-	timeout time.Duration
+	q             Querier
+	st            store.Store
+	globalTimeout time.Duration
 }
 
-// NewCollector creates a Collector with the given per-run query timeout.
-func NewCollector(q Querier, st store.Store, timeout time.Duration) *Collector {
-	return &Collector{q: q, st: st, timeout: timeout}
+// NewCollector creates a Collector with globalTimeout as the fallback query
+// timeout for metrics that do not set their own query_timeout.
+func NewCollector(q Querier, st store.Store, globalTimeout time.Duration) *Collector {
+	return &Collector{q: q, st: st, globalTimeout: globalTimeout}
 }
 
 // CollectOnce executes the metric's query once and stores the data point
 // stamped with ts (the cycle start time shared by all metrics in a cycle).
+// The run is bounded by the metric's effective query timeout.
 func (c *Collector) CollectOnce(ctx context.Context, m config.Metric, ts time.Time) error {
-	runCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	runCtx, cancel := context.WithTimeout(ctx, m.EffectiveQueryTimeout(c.globalTimeout))
 	defer cancel()
 	v, err := c.q.QueryValue(runCtx, m.Query)
 	if err != nil {
