@@ -10,7 +10,7 @@ postgres:
 
 collector:
   interval: 10s         # global collection interval (per-metric override in metrics.yaml)
-  query_timeout: 3s
+  query_timeout: 3s     # global query timeout (per-metric override in metrics.yaml; must not exceed effective interval)
 
 storage:
   data_dir: "./data"

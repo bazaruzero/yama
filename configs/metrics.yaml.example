@@ -6,4 +6,5 @@ metrics:
     query: "SELECT 1"
     type: gauge
     # interval: 5s      # optional per-metric override of collector.interval
+    # query_timeout: 30s  # optional per-metric override of collector.query_timeout (must not exceed effective interval)
     # enabled: false    # optional; default is enabled

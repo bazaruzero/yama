@@ -43,6 +43,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := config.ValidateQueryTimeouts(cfg, mcfg); err != nil {
+		return err
+	}
 
 	st, err := store.OpenBadger(cfg.Storage.DataDir)
 	if err != nil {
