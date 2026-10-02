@@ -1,0 +1,107 @@
+/* Light warm dashboard theme — committed asset served by the frontend
+   binary itself (no CDN, no external requests). Hand-written per the
+   design's documented fallback for compiled Tailwind CSS. */
+:root {
+  --bg: #faf6ef;          /* warm ivory */
+  --panel: #fffdfa;       /* warm white */
+  --border: #e9dfcf;      /* soft sand */
+  --text: #514538;        /* warm cocoa */
+  --muted: #a39482;       /* warm taupe */
+  --accent: #d97d45;      /* terracotta */
+  --accent-deep: #b85f33; /* deep terracotta */
+  --error: #c65b4b;       /* warm red */
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  margin: 0 0 16px;
+}
+
+#banner { min-height: 0; }
+
+.banner-down {
+  background: rgba(198, 91, 75, 0.08);
+  border: 1px solid var(--error);
+  color: #a84e3f;
+  border-radius: 6px;
+  padding: 8px 14px;
+  margin-bottom: 14px;
+  font-weight: 500;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  min-width: 0;
+}
+
+.panel-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.panel-desc {
+  margin: 2px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel-body { min-height: 160px; }
+
+.panel-body svg.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 180px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.state.error {
+  color: #a84e3f;
+  border-color: #dca79c;
+}
+
+svg .line { stroke: var(--accent); stroke-width: 2; }
+svg .dot { fill: var(--accent); }
+svg .dot:hover { fill: var(--accent-deep); r: 4px; }
+svg .grid { stroke: #efe6d8; stroke-width: 1; }
+svg .label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+svg .legend { fill: var(--text); font-size: 12px; }

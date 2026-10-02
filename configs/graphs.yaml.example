@@ -1,0 +1,7 @@
+# Graphs configuration — copy to graphs.yaml and edit.
+# One dashboard panel per graph: name is the panel title, metric is the
+# metric name from the agent's metrics.yaml, description is optional.
+graphs:
+  - name: "Connectivity"
+    metric: select_1
+    description: "SELECT 1 connectivity check against the monitored database"

@@ -1,0 +1,11 @@
+# Frontend (dashboard) configuration — copy to webui.yaml and edit.
+agent:
+  host: "localhost"   # host of the running YAMA agent to visualize
+  port: 8080          # the agent's api.listen port
+  # timeout: 5s       # per-request timeout for calls to the agent (default 5s)
+
+ui:
+  listen: ":8081"     # dashboard listen address
+
+refresh:
+  interval: 10s       # automatic panel refresh interval
