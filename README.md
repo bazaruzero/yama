@@ -1,6 +1,17 @@
 # YAMA — Yet Another Monitoring Agent
 
-A minimal PostgreSQL metrics collector. Single static binary, zero runtime dependencies.
+A minimal PostgreSQL metrics collector with a companion web dashboard. Single static binaries, zero runtime dependencies.
+
+## Contents
+
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Web Dashboard (yama-web)](#web-dashboard-yama-web)
+- [How collection is scheduled](#how-collection-is-scheduled)
+- [Adding Metrics](#adding-metrics)
+- [Development](#development)
+- [Project Structure](#project-structure)
 
 ## Features
 
@@ -8,8 +19,9 @@ A minimal PostgreSQL metrics collector. Single static binary, zero runtime depen
 - Per-metric enable/disable and collection interval overrides
 - Embedded BadgerDB storage — no external database server
 - REST API for querying collected data points
+- Web dashboard (`yama-web`): live auto-refreshing panels served by a standalone binary
 - Graceful shutdown on SIGTERM/SIGINT
-- Static binary, pure Go: copy and run
+- Static binaries, pure Go: copy and run
 
 ## Prerequisites
 
@@ -24,7 +36,8 @@ A minimal PostgreSQL metrics collector. Single static binary, zero runtime depen
 make build
 ```
 
-Produces `./bin/yama`.
+Produces `./bin/yama` (the agent) and `./bin/yama-web` (the dashboard
+frontend).
 
 ### 2. Configure
 
@@ -91,6 +104,70 @@ naming the invalid parameter; non-GET methods return `405 Method Not Allowed`.
 
 `Ctrl+C` or `kill -TERM <pid>` — the agent drains and exits cleanly.
 
+## Web Dashboard (yama-web)
+
+`yama-web` is an independent dashboard binary: point it at any running,
+**unmodified** agent and it serves a Grafana-style page of that agent's
+metrics — no SSH, no `curl`, no Grafana server to install. It talks to the
+agent's read-only API server-side (the browser only ever talks to the
+frontend), so it can run on your laptop against a remote agent with just
+the agent's HTTP port reachable.
+
+### 1. Configure
+
+```
+cp configs/webui.yaml.example ./webui.yaml
+cp configs/graphs.yaml.example ./graphs.yaml
+```
+
+`webui.yaml` (system settings):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `agent.host` | `localhost` | Host of the YAMA agent to visualize |
+| `agent.port` | `8080` | The agent's `api.listen` port |
+| `agent.timeout` | `5s` | Per-request timeout for calls to the agent |
+| `ui.listen` | `:8081` | Dashboard listen address |
+| `refresh.interval` | `10s` | Automatic panel refresh interval |
+
+`graphs.yaml` defines the panels — one per graph, in file order (at most
+two per row):
+
+```yaml
+graphs:
+  - name: "Active sessions"
+    metric: pg_active_sessions
+    description: "count(*) from pg_stat_activity"
+```
+
+`name` is the panel title, `metric` is the metric name from the agent's
+`metrics.yaml`, `description` is optional. Graphs are defined exclusively
+in this file — there is no UI-side editing.
+
+### 2. Run
+
+```
+./bin/yama-web --config ./webui.yaml --graphs ./graphs.yaml
+```
+
+Then open `http://localhost:8081`.
+
+### Behavior
+
+- Each panel shows the **last hour** of its metric as a smooth line chart
+  (min/max/current legend under the chart, tooltips on every point) and
+  refreshes automatically every `refresh.interval` — no page reload, no
+  user action.
+- A metric with no data in the window renders an explicit "No data in the
+  last hour" panel; the rest of the page is unaffected.
+- If the agent becomes unreachable, a visible banner appears and panels
+  switch to an error state; when the agent comes back, everything recovers
+  automatically — no frontend restart needed. The frontend also starts
+  fine while the agent is down.
+- The page uses a light warm theme; all assets (including the vendored
+  htmx) are embedded in the binary and served by the frontend itself — no
+  CDN, no external requests, no Node/npm toolchain.
+
 ## How collection is scheduled
 
 Collection runs in cycles driven by `collector.interval`: the agent wakes,
@@ -151,20 +228,23 @@ Notes:
 ## Development
 
 ```
-make build    # build binary
+make build    # build both binaries (yama, yama-web)
 make test     # run tests
 make lint     # go vet + gofmt check
+make css      # optional: recompile the dashboard CSS (Tailwind standalone CLI)
 make clean    # remove build artifacts
 ```
 
 ## Project Structure
 
 ```
-cmd/yama/              Entry point
-internal/config/       Configuration loading and validation
+cmd/yama/              Agent entry point
+cmd/yama-web/          Dashboard frontend entry point
+internal/config/       Agent configuration loading and validation
 internal/postgres/     PostgreSQL connection management
 internal/collect/      Metric collector and scheduler
 internal/store/        BadgerDB storage layer
 internal/api/          REST API handlers
+internal/web/          Dashboard frontend (config, agent client, chart, server)
 configs/               Example configuration files
 ```
