@@ -4,7 +4,7 @@ YAMA's backend collects and stores metrics, but the only consumption path is `cu
 
 ## What Changes
 
-- Add an independent frontend binary (`yama-web`, `cmd/yama-web`) deployable separately from the agent: point it at any running, unmodified YAMA agent and it serves a Grafana-style dark dashboard of that agent's metrics.
+- Add an independent frontend binary (`yama-web`, `cmd/yama-web`) deployable separately from the agent: point it at any running, unmodified YAMA agent and it serves a Grafana-style dashboard with a light warm theme of that agent's metrics.
 - Server-rendered UI: Go HTML templates, vendored single-file htmx for declarative auto-refresh polling (`hx-trigger="every Ns"`), server-rendered SVG line charts, Tailwind CSS (compiled at build via the standalone CLI; committed CSS keeps day-to-day builds Go-only). No Node/npm toolchain.
 - Two YAML config files for the frontend: a **system** config (agent backend URL, UI listen address, polling interval, HTTP timeout) and a **graphs** config (panel definitions: display name, backend metric name, description).
 - Fixed rolling last-1-hour window with auto-refresh at the polling interval; no page reload, no time picker in baseline.

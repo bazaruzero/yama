@@ -1,0 +1,4 @@
+<div class="panel-body" hx-get="{{.PanelURL}}" hx-trigger="every {{.Interval}}" hx-swap="outerHTML">{{if eq .State "chart"}}{{.Chart}}
+{{else if eq .State "nodata"}}<div class="state nodata">No data in the last hour</div>
+{{else}}<div class="state error">Data unavailable — backend unreachable</div>
+{{end}}</div>

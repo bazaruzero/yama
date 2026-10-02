@@ -1,11 +1,11 @@
 ## Purpose
 
-Defines the frontend's dashboard server: it turns any running, unmodified agent's read-only metric API into a live, dark, Grafana-style web page served by a standalone binary, including refresh behavior and degraded states.
+Defines the frontend's dashboard server: it turns any running, unmodified agent's read-only metric API into a live, Grafana-style web page with a light warm theme, served by a standalone binary, including refresh behavior and degraded states.
 
 ## ADDED Requirements
 
 ### Requirement: Dashboard page from graphs config
-The system SHALL serve a single dashboard page in HTML at the root path on the configured listen address, rendering one panel per graph defined in the graphs config, ordered as configured. Each panel SHALL show the graph's title and description and a line chart of its metric. The page SHALL use a dark theme, and all page assets (styles and scripts) SHALL be served by the frontend itself, with no requests to external hosts. The frontend SHALL start and serve the page even when the agent is unreachable.
+The system SHALL serve a single dashboard page in HTML at the root path on the configured listen address, rendering one panel per graph defined in the graphs config, ordered as configured. Each panel SHALL show the graph's title and description and a line chart of its metric. The page SHALL use a light warm color theme, panels SHALL be laid out at most two per row (stacking to one on narrow screens), and each chart SHALL show its min/max/current legend below the chart. All page assets (styles and scripts) SHALL be served by the frontend itself, with no requests to external hosts. The frontend SHALL start and serve the page even when the agent is unreachable.
 
 #### Scenario: Dashboard renders all configured panels
 - **WHEN** the graphs config defines three graphs and the browser opens the dashboard root

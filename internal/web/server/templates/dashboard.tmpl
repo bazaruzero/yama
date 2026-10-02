@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YAMA Dashboard</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <h1>YAMA</h1>
+  <div id="banner" hx-get="/banner" hx-trigger="every {{.Interval}}" hx-swap="innerHTML">{{template "banner.tmpl" .BackendDown}}</div>
+  <main class="grid">
+    {{range .Panels}}<section class="panel">
+      <header class="panel-header">
+        <h2>{{.Graph.Name}}</h2>
+        {{with .Graph.Description}}<p class="panel-desc">{{.}}</p>{{end}}
+      </header>
+      {{template "panelbody.tmpl" .}}
+    </section>{{end}}
+  </main>
+</body>
+</html>

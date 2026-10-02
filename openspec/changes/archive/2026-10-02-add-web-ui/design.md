@@ -5,7 +5,7 @@ The backend (`cmd/yama` + `internal/{config,postgres,collect,store,api}`) is com
 ## Goals / Non-Goals
 
 **Goals:**
-- `yama-web` binary: load two YAML files, serve a dark dashboard of SVG line charts for the last hour, auto-refreshing via htmx, with degraded states and automatic recovery.
+- `yama-web` binary: load two YAML files, serve a light warm dashboard of SVG line charts for the last hour, auto-refreshing via htmx, with degraded states and automatic recovery.
 - Walking skeleton first (one panel end-to-end), then grid/theme/no-data/banner polish — mirrored in task ordering.
 - Frontend packages fully independent of backend `internal/` packages (no shared imports) so the binaries can evolve/deploy independently.
 
@@ -28,7 +28,7 @@ The backend (`cmd/yama` + `internal/{config,postgres,collect,store,api}`) is com
 - Full page `GET /` renders all panels from `graphs.yaml`; each panel body carries `hx-get="/panels/{name}" hx-trigger="every {interval}s" hx-swap="outerHTML"`, so htmx re-fetches the panel fragment and swaps it in place — this alone implements auto-refresh, no-data, and error states, because the fragment is the state.
 - `GET /panels/{name}` (HTML fragment) fetches `from=now-1h&to=now` from the agent server-side and returns either the chart SVG, a no-data placeholder, or an error state.
 - Connectivity banner: `GET /banner` with `hx-trigger="every {interval}s"`; the fragment returns the banner only when the last panel refresh cycle observed an agent failure (kept simple: any panel fetch failure in the last cycle marks the state; success clears it). State lives in the server process — coarse but sufficient for baseline.
-- Charts: `chart` package maps points to a viewBox-scaled SVG polyline plus axes, min/max/current legend values, and per-point `<circle><title>` native tooltips. Alternative: client-side chart JS — rejected, violates no-heavy-JS/SSR direction.
+- Charts: `chart` package maps points to a viewBox-scaled smooth monotone cubic Bézier path (Fritsch–Carlson tangents: the curve passes exactly through every point and never overshoots) with round joins/caps, plus axes, min/max/current legend below the chart, and per-point `<circle><title>` native tooltips. Alternative: straight `<polyline>` — rejected as too angular (user feedback); heavier smoothing that misses points — rejected, dots must sit on the line.
 
 ### Agent client and failure mapping
 `agent.Client` wraps the metric endpoint with the configured timeout, one shared `http.Client` (transport reuse), and normalizes failures: unreachable/timeout/non-2xx/unparseable body → a single error type surfaced as the panel error state + banner trigger. It requests explicit `from`/`to` (not the API's 3h default) so the 1h window holds regardless of agent defaults.
@@ -56,4 +56,6 @@ Purely additive: new binary, new example configs, new `internal/web` tree; no ch
 
 ## Open Questions
 
-- Exact dark-theme palette and panel grid sizing (2-column vs auto-fill) — cosmetic, settle during implementation.
+(none — the palette and grid questions were settled by user decision: light
+warm shades with a terracotta accent, at most two panels per row, and the
+min/max/current legend rendered below the chart)
