@@ -1,0 +1,133 @@
+# OpenSpec project configuration.
+#
+# schema:      default workflow schema (resolution order: CLI flag >
+#              change metadata > this file > built-in default).
+# context:     project background injected into EVERY artifact prompt.
+# rules:       per-artifact content constraints, injected only into the
+#              matching artifact's prompt (keys = artifact ids of the
+#              schema: proposal, specs, design, tasks).
+# operations:  advisory guidance for the apply/archive workflows.
+
+schema: spec-driven
+
+context: |
+  Project: YAMA (Yet Another Monitoring Agent) — a minimal PostgreSQL
+  metrics collector (binary: yama) plus a companion web dashboard
+  (binary: yama-web). Pure Go, single static binaries (CGO_ENABLED=0),
+  zero runtime dependencies beyond a reachable PostgreSQL and a
+  writable data directory.
+
+  Tech stack:
+  - Go 1.27, module github.com/bazaruzero/yama
+  - Only third-party deps: github.com/jackc/pgx/v5 (driver + pool),
+    github.com/dgraph-io/badger/v4 (embedded storage), gopkg.in/yaml.v3
+    (configs). htmx is vendored for the dashboard. Do not introduce new
+    dependencies without explicit justification in the change.
+  - No Node/npm toolchain at runtime; dashboard CSS is committed
+    (optional `make css` rebuilds it with the Tailwind standalone CLI).
+
+  Package map:
+  - cmd/yama            agent entrypoint: config -> store -> pool ->
+                        scheduler -> API -> graceful shutdown
+  - cmd/yama-web        dashboard entrypoint
+  - internal/config     agent + metrics YAML loading, strict validation
+  - internal/postgres   pgx pool wrapper; QueryValue enforces the
+                        1-row, 1-numeric-column query contract
+  - internal/collect    Collector (query + store one point) and
+                        Scheduler (cycle-based, per-metric intervals,
+                        per-metric dedup dispatch, bounded worker pool)
+  - internal/store      Store interface + BadgerStore (key: metric
+                        name + 0x00 + big-endian unix-nano timestamp;
+                        value: type byte + float64)
+  - internal/api        read-only REST API (net/http ServeMux patterns)
+  - internal/web/*      dashboard: config, agent HTTP client, chart
+                        rendering, server (htmx panel fragments,
+                        embedded assets)
+
+  Runtime configs (examples in configs/, working copies at repo root are
+  gitignored): config.yaml + metrics.yaml (agent), webui.yaml +
+  graphs.yaml (dashboard). The password may come from PG_PASSWORD.
+
+  Hard invariants — every change must preserve these:
+  - Fail fast: all config validation happens at startup; invalid config
+    exits non-zero with an error naming the file and field. YAML parsing
+    is strict (yaml.v3 KnownFields) — unknown fields are rejected.
+  - Duration fields accept "30s"-style strings or integer seconds.
+  - postgres.max_db_connections (default 1, minimum 1) is a hard ceiling
+    on concurrent PostgreSQL connections; the scheduler never exceeds it.
+  - No metric's effective query_timeout may exceed its effective interval
+    (per-metric overrides combined with collector.* globals); equality
+    is allowed; violations abort startup naming both values and sources.
+  - Metric queries return exactly one row with one numeric column.
+  - Collection is cycle-based: every point in a cycle carries the same
+    UTC timestamp (the cycle wake time); a metric still in flight when
+    due again is skipped that cycle — no queue pile-up.
+  - Agent API is read-only: GET /api/v1/metrics/{name}/data with RFC3339
+    from/to (inclusive; to defaults to now, from defaults to last 3h);
+    responses are JSON arrays of {timestamp, value} ascending by time;
+    errors are JSON {"error": ...} with 400/405/500.
+  - Graceful shutdown on SIGINT/SIGTERM: stop the API, cancel collection,
+    drain workers, close storage. All I/O is bounded by timeouts.
+  - Dashboard talks to the agent server-side; the browser only contacts
+    the frontend origin; all assets are embedded (no CDN). The frontend
+    starts and degrades gracefully while the agent is down, and recovers
+    without restart.
+  - Timestamps are UTC everywhere; the API serializes RFC3339Nano.
+
+  Code conventions:
+  - Every package has a doc comment; exported identifiers are documented.
+  - Errors wrap with %w and carry context (config file, metric name).
+  - Logging via log/slog with key-value attributes.
+  - Testability via small interfaces (store.Store, collect.Querier),
+    injectable now/clock funcs, and an in-memory Badger store for tests.
+  - Table-driven tests live in the same package as the code; interface
+    compliance is asserted via `var _ Store = (*BadgerStore)(nil)`.
+  - Build/test: `make build`, `make test` (go test ./...), `make lint`
+    (go vet + gofmt check).
+
+  Existing spec capabilities (openspec/specs/): agent-config,
+  metric-collection, metric-storage, metric-api, web-dashboard,
+  ui-config. Check them before proposing a change; new work should fit
+  these capabilities or explicitly justify adding new ones.
+
+rules:
+  proposal:
+    - "Open openspec/specs/ for the affected capabilities before writing; name each capability the change touches and whether it adds to or modifies existing requirements."
+    - "Brownfield project: default to modifying existing behavior. Explicitly call out any breaking change to the agent API JSON shape, YAML config fields, CLI flags, or on-disk storage format."
+    - "Keep scope minimal: one change = one coherent capability delta; include an explicit non-goals section."
+    - "State the motivation (what problem, for whom) before the solution."
+  specs:
+    - "Match the existing spec style exactly: '## Purpose', delta headers ('## ADDED/MODIFIED/REMOVED Requirements'), '### Requirement: <name>' with SHALL statements, and '#### Scenario: <name>' blocks using '- **WHEN**' / '- **THEN**' bullets."
+    - "Specify observable, testable behavior only — no implementation details (package names, Go APIs, or data structures) in requirements."
+    - "Every requirement has at least one scenario; cover success, edge, and failure cases."
+    - "MODIFIED requirements carry the full replacement requirement text, not a diff."
+    - "Preserve the hard invariants: cycle-shared timestamps, max_db_connections ceiling, effective query_timeout <= effective interval, fail-fast strict config validation, the 1-row/1-column query contract, read-only API, embedded assets."
+    - "Reuse existing capability directories (agent-config, metric-collection, metric-storage, metric-api, web-dashboard, ui-config) when the change fits; create a new capability only when no existing one covers it."
+  design:
+    - "Keep design proportional: a few lines for small changes; only elaborate where a decision is non-obvious."
+    - "Respect hard constraints: pure Go, CGO_ENABLED=0 static binaries, no new third-party dependencies without explicit justification, no external services (no separate DB server, no CDN)."
+    - "Specify how errors surface: startup fail-fast (which message names which field) versus logged-and-continue at runtime."
+    - "For anything concurrent or long-running: state its shutdown behavior and which timeout bounds it."
+    - "If config is touched: define validation order, defaults, and error messages that name the file and field."
+  tasks:
+    - "Numbered, atomic, verifiable steps grouped in '## N. Section' groups with N.M items, like existing tasks.md files."
+    - "Reference concrete repo-root file paths (e.g. internal/collect/scheduler.go); state the verification for each step inline ('verify ...')."
+    - "Every implementation task has a corresponding test task in the project's table-driven style, in the same package as the code."
+    - "Final section: run `make lint` and `make test`; update README.md and configs/*.example when user-facing behavior or config fields change."
+    - "No tasks outside the change's scope; no drive-by refactors."
+
+operations:
+  apply:
+    guidance:
+      - "Read the change's tasks.md and design.md before coding; implement in listed order and keep the diff minimal."
+      - "Follow existing code conventions: package doc comments, %-wrapped errors with context, slog key-value logging, table-driven tests in the same package, small interfaces for testable seams."
+      - "Verify after each task: build the affected package and run its tests; before declaring done run `make lint` and `make test`."
+      - "Never expand scope or refactor untouched code; if a task reveals a needed decision or a spec conflict, stop and surface it instead of improvising."
+      - "Update tasks.md checkboxes as tasks complete."
+  archive:
+    guidance:
+      - "Before archiving, confirm every task is complete, `make lint` and `make test` pass, and the delta specs merged cleanly into the main specs."
+      - "Keep the completion summary concise."
+
+githubCopilot:
+  cloudAgent: false

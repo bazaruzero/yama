@@ -7,9 +7,12 @@ data/
 # Logs
 *.log
 
-# Local runtime configs (examples live in configs/)
-config.yaml
-metrics.yaml
+# Local runtime configs (examples live in configs/; anchored to repo root
+# so openspec/config.yaml stays tracked)
+/config.yaml
+/metrics.yaml
+/webui.yaml
+/graphs.yaml
 
 # OS / editor cruft
 .DS_Store
