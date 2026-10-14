@@ -8,7 +8,7 @@
 #              schema: proposal, specs, design, tasks).
 # operations:  advisory guidance for the apply/archive workflows.
 
-schema: spec-driven
+schema: superpowers-bridge
 
 context: |
   Project: YAMA (Yet Another Monitoring Agent) — a minimal PostgreSQL
