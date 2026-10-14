@@ -235,6 +235,33 @@ make css      # optional: recompile the dashboard CSS (Tailwind standalone CLI)
 make clean    # remove build artifacts
 ```
 
+### After cloning to a new computer
+
+The repo tracks the tooling configuration (`.opencode/`, `openspec/`),
+but not the installed dependencies (`node_modules`, Go module cache).
+
+1. **Go toolchain** — install Go (see `go.mod` for the required version),
+   then download modules:
+
+   ```
+   go mod download
+   ```
+
+2. **OpenSpec / Superpowers tooling** (only needed for spec-driven
+   development with OpenCode) — the plugin is pinned in
+   `.opencode/package.json`; restore it with:
+
+   ```
+   npm install --prefix .opencode
+   ```
+
+   or run `opencode plugin add superpowers` once. The
+   `superpowers-bridge` OpenSpec schema lives in
+   `openspec/schemas/superpowers-bridge/` and needs no extra setup.
+
+3. **OpenSpec CLI** (optional) — install the `openspec` CLI if you plan
+   to create/validate changes (`openspec schema validate` etc.).
+
 ## Project Structure
 
 ```
