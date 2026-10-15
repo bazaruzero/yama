@@ -99,10 +99,39 @@ func LoadSystem(path string) (*SystemConfig, error) {
 }
 
 // Graph is a single panel definition from the graphs configuration file.
+// Metric references one or more stored series names: a scalar string or a
+// list of strings, freely mixable (plain metrics and multi-metric
+// sub-series alike).
 type Graph struct {
-	Name        string `yaml:"name"`
-	Metric      string `yaml:"metric"`
-	Description string `yaml:"description"`
+	Name        string     `yaml:"name"`
+	Metric      MetricList `yaml:"metric"`
+	Description string     `yaml:"description"`
+}
+
+// MetricList is a graph's metric reference list. It unmarshals from either
+// a scalar string (one series) or a list of strings.
+type MetricList []string
+
+// UnmarshalYAML implements yaml.Unmarshaler, accepting a scalar string or a
+// list of strings; any other YAML type is rejected.
+func (m *MetricList) UnmarshalYAML(value *yaml.Node) error {
+	switch {
+	case value.Kind == yaml.ScalarNode && value.Tag == "!!str":
+		*m = MetricList{value.Value}
+		return nil
+	case value.Kind == yaml.SequenceNode:
+		out := make(MetricList, 0, len(value.Content))
+		for _, el := range value.Content {
+			if el.Kind != yaml.ScalarNode || el.Tag != "!!str" {
+				return fmt.Errorf("invalid metric entry %q: must be a string", el.Value)
+			}
+			out = append(out, el.Value)
+		}
+		*m = out
+		return nil
+	default:
+		return fmt.Errorf("invalid metric value: must be a string or a list of strings")
+	}
 }
 
 // GraphsConfig is the root of the graphs configuration file.
@@ -132,8 +161,18 @@ func LoadGraphs(path string) (*GraphsConfig, error) {
 			return nil, fmt.Errorf("graphs config %q: duplicate graph name %q", path, g.Name)
 		}
 		seen[g.Name] = true
-		if g.Metric == "" {
+		if len(g.Metric) == 0 {
 			return nil, fmt.Errorf("graphs config %q: graph %q is missing a metric", path, g.Name)
+		}
+		seriesSeen := make(map[string]bool, len(g.Metric))
+		for _, s := range g.Metric {
+			if s == "" {
+				return nil, fmt.Errorf("graphs config %q: graph %q has an empty metric name", path, g.Name)
+			}
+			if seriesSeen[s] {
+				return nil, fmt.Errorf("graphs config %q: graph %q has duplicate metric name %q", path, g.Name, s)
+			}
+			seriesSeen[s] = true
 		}
 	}
 	return &cfg, nil

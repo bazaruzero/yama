@@ -138,11 +138,18 @@ graphs:
   - name: "Active sessions"
     metric: pg_active_sessions
     description: "count(*) from pg_stat_activity"
+  - name: "Database activity"
+    metric: [db_stats.commits, db_stats.reads]
+    description: "several series in one panel"
 ```
 
 `name` is the panel title, `metric` is the metric name from the agent's
-`metrics.yaml`, `description` is optional. Graphs are defined exclusively
-in this file — there is no UI-side editing.
+`metrics.yaml` — either a single name or a list of names, freely mixable
+(any stored series, including multi-metric sub-series). A graph with
+several metrics renders **one panel with one line per series** (distinct
+colors, per-series legend); a single-metric graph keeps the
+min/max/current legend. `description` is optional. Graphs are defined
+exclusively in this file — there is no UI-side editing.
 
 ### 2. Run
 
@@ -154,10 +161,10 @@ Then open `http://localhost:8081`.
 
 ### Behavior
 
-- Each panel shows the **last hour** of its metric as a smooth line chart
-  (min/max/current legend under the chart, tooltips on every point) and
-  refreshes automatically every `refresh.interval` — no page reload, no
-  user action.
+- Each panel shows the **last hour** of its metric(s) as a smooth line chart
+  (per-series or min/max/current legend under the chart, tooltips on every
+  point) and refreshes automatically every `refresh.interval` — no page
+  reload, no user action.
 - A metric with no data in the window renders an explicit "No data in the
   last hour" panel; the rest of the page is unaffected.
 - If the agent becomes unreachable, a visible banner appears and panels
@@ -208,22 +215,55 @@ Restart YAMA to apply changes.
 
 ### Metric types
 
-Each metric declares one of two types via the `type` field (anything else
+Each metric declares one of three types via the `type` field (anything else
 is rejected at startup):
 
 | Type | Meaning | Typical use |
 |---|---|---|
 | `gauge` | A point-in-time value that can go up or down | session counts, table sizes, replication lag |
 | `counter` | A cumulative, monotonically increasing value | `pg_stat_*` totals such as transactions or tuples read |
+| `multi` | One query producing several named series | several `pg_stat_*` values from a single scan |
 
 Notes:
 
-- The query MUST return exactly **one row with one numeric column** — that
-  value is stored as the data point (raw, for both types; rate/delta
-  computation over counters is not performed by the agent).
+- A `gauge` or `counter` query MUST return exactly **one row with one
+  numeric column** — that value is stored as the data point (raw, for both
+  types; rate/delta computation over counters is not performed by the
+  agent).
 - Every point of one collection cycle shares the cycle timestamp (see
   [How collection is scheduled](#how-collection-is-scheduled)), regardless
   of metric type.
+
+### Multi metrics
+
+A `multi` metric runs **one query per collection** that returns exactly one
+row with one or more numeric columns; each column becomes its own stored
+series named `<metric>.<column>`, typed per the `columns` map:
+
+```yaml
+metrics:
+  - name: db_stats
+    query: "SELECT xact_commit AS commits, xact_rollback AS rollbacks, blks_read AS reads FROM pg_stat_database WHERE datname = current_database()"
+    type: multi
+    columns:
+      commits: counter
+      rollbacks: counter
+      reads: counter
+```
+
+- Every column MUST be declared in `columns` (with type `counter` or
+  `gauge`), and `columns` is only valid on `multi` metrics — invalid
+  configurations abort startup naming the metric and field.
+- At runtime the query's returned columns MUST exactly match the declared
+  set. Any mismatch (renamed, dropped, or extra column) fails that
+  collection run only: it is logged with both column sets, no points are
+  written, and later runs continue.
+- The sub-series (`db_stats.commits`, `db_stats.reads`, ...) are ordinary
+  series: they appear in the agent API like any metric and can be mixed
+  freely with other metrics in dashboard graphs.
+- Configured names must not collide: a declared metric named
+  `db_stats.commits` alongside the multi metric above is rejected at
+  startup.
 
 ## Development
 

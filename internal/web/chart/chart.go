@@ -20,6 +20,15 @@ const (
 	padR   = 12.0
 )
 
+// palette is the fixed series color cycle for multi-series charts. Index 0
+// matches the stylesheet accent so a single-series chart keeps its look.
+var palette = []string{"#d97d45", "#3f72af", "#5aa469", "#8e6bbf", "#c44e52", "#4c9a9f"}
+
+// seriesColorAt returns the palette color for series index i, cycling.
+func seriesColorAt(i int) string {
+	return palette[i%len(palette)]
+}
+
 // Options controls the rendering of one chart.
 type Options struct {
 	// From and To define the visible time window (the x axis domain).
@@ -27,28 +36,59 @@ type Options struct {
 	From, To time.Time
 }
 
-// Clip returns only the points that fall within the window in opts, in
-// their original order. Render draws exactly these points; callers use the
-// clipped length to decide between a chart and a no-data state.
-func Clip(points []agent.Point, opts Options) []agent.Point {
-	in := make([]agent.Point, 0, len(points))
-	for _, p := range points {
-		if p.Timestamp.Before(opts.From) || p.Timestamp.After(opts.To) {
-			continue
-		}
-		in = append(in, p)
-	}
-	return in
+// Series is one named metric series rendered as a single line.
+type Series struct {
+	Name   string
+	Points []agent.Point
 }
 
-// Render returns an inline SVG line chart of the points for the window in
-// opts, with UTC time and value axis labels, a min/max/current legend below
-// the chart, and a native SVG tooltip on every point. It returns an empty
-// string when there are no points in the window; callers render a no-data
+// Clip returns only the points that fall within the window in opts, in
+// their original order, for each series. Render draws exactly these points;
+// callers use the clipped lengths to decide between a chart and a no-data
 // state.
-func Render(points []agent.Point, opts Options) string {
-	in := Clip(points, opts)
-	if len(in) == 0 {
+func Clip(series []Series, opts Options) []Series {
+	out := make([]Series, len(series))
+	for i, s := range series {
+		in := make([]agent.Point, 0, len(s.Points))
+		for _, p := range s.Points {
+			if p.Timestamp.Before(opts.From) || p.Timestamp.After(opts.To) {
+				continue
+			}
+			in = append(in, p)
+		}
+		out[i] = Series{Name: s.Name, Points: in}
+	}
+	return out
+}
+
+// Render returns an inline SVG line chart with one line per series for the
+// window in opts, with UTC time and value axis labels and a legend below
+// the chart. All series share one absolute y-axis (no normalization).
+// A single series keeps the stylesheet accent color and shows a
+// min/max/current legend; multiple series get distinct palette colors and a
+// per-series legend (name and current value). It returns an empty string
+// when no series has points in the window; callers render a no-data state.
+func Render(series []Series, opts Options) string {
+	in := Clip(series, opts)
+
+	vmin, vmax := 0.0, 0.0
+	first := true
+	for _, s := range in {
+		for _, p := range s.Points {
+			if first {
+				vmin, vmax = p.Value, p.Value
+				first = false
+				continue
+			}
+			if p.Value < vmin {
+				vmin = p.Value
+			}
+			if p.Value > vmax {
+				vmax = p.Value
+			}
+		}
+	}
+	if first {
 		return ""
 	}
 
@@ -57,15 +97,6 @@ func Render(points []agent.Point, opts Options) string {
 		to = from.Add(time.Second)
 	}
 
-	vmin, vmax := in[0].Value, in[0].Value
-	for _, p := range in[1:] {
-		if p.Value < vmin {
-			vmin = p.Value
-		}
-		if p.Value > vmax {
-			vmax = p.Value
-		}
-	}
 	ymin, ymax := vmin, vmax
 	if ymin == ymax {
 		ymin, ymax = vmin-1, vmax+1
@@ -88,6 +119,7 @@ func Render(points []agent.Point, opts Options) string {
 		return plotY1 - frac*(plotY1-plotY0)
 	}
 
+	single := len(in) == 1
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %g %g" xmlns="http://www.w3.org/2000/svg" role="img">`, width, height)
 
@@ -114,19 +146,47 @@ func Render(points []agent.Point, opts Options) string {
 		fmt.Fprintf(&b, `<text class="label label-x" x="%g" y="%g" text-anchor="%s">%s</text>`, x, plotY1+18, anchor, ts.UTC().Format("15:04:05"))
 	}
 
-	verts := make([][2]float64, len(in))
-	for i, p := range in {
-		verts[i] = [2]float64{xOf(p.Timestamp), yOf(p.Value)}
-	}
-	fmt.Fprintf(&b, `<path class="line" fill="none" stroke-linejoin="round" stroke-linecap="round" d="%s"/>`, smoothPath(verts))
-	for _, p := range in {
-		fmt.Fprintf(&b, `<circle class="dot" cx="%g" cy="%g" r="2.5"><title>%s — %s</title></circle>`,
-			xOf(p.Timestamp), yOf(p.Value), p.Timestamp.UTC().Format("2006-01-02 15:04:05"), fmtVal(p.Value))
+	for i, s := range in {
+		if len(s.Points) == 0 {
+			continue
+		}
+		var colorAttr string
+		if !single {
+			colorAttr = fmt.Sprintf(` style="stroke:%s"`, seriesColorAt(i))
+		}
+		verts := make([][2]float64, len(s.Points))
+		for j, p := range s.Points {
+			verts[j] = [2]float64{xOf(p.Timestamp), yOf(p.Value)}
+		}
+		fmt.Fprintf(&b, `<path class="line" fill="none" stroke-linejoin="round" stroke-linecap="round"%s d="%s"/>`, colorAttr, smoothPath(verts))
+		var dotColorAttr string
+		if !single {
+			dotColorAttr = fmt.Sprintf(` style="fill:%s"`, seriesColorAt(i))
+		}
+		for _, p := range s.Points {
+			fmt.Fprintf(&b, `<circle class="dot" cx="%g" cy="%g" r="2.5"%s><title>%s — %s</title></circle>`,
+				xOf(p.Timestamp), yOf(p.Value), dotColorAttr, p.Timestamp.UTC().Format("2006-01-02 15:04:05"), fmtVal(p.Value))
+		}
 	}
 
 	// Legend sits below the chart, under the x axis labels.
-	fmt.Fprintf(&b, `<text class="legend" x="%g" y="%g" text-anchor="middle">min %s · max %s · current %s</text>`,
-		width/2, plotY1+40, fmtVal(vmin), fmtVal(vmax), fmtVal(in[len(in)-1].Value))
+	var legend string
+	if single {
+		last := in[0].Points[len(in[0].Points)-1].Value
+		legend = fmt.Sprintf("min %s · max %s · current %s", fmtVal(vmin), fmtVal(vmax), fmtVal(last))
+	} else {
+		parts := make([]string, 0, len(in))
+		for _, s := range in {
+			if len(s.Points) == 0 {
+				parts = append(parts, s.Name+": —")
+				continue
+			}
+			parts = append(parts, s.Name+": "+fmtVal(s.Points[len(s.Points)-1].Value))
+		}
+		legend = strings.Join(parts, " · ")
+	}
+	fmt.Fprintf(&b, `<text class="legend" x="%g" y="%g" text-anchor="middle">%s</text>`,
+		width/2, plotY1+40, legend)
 	b.WriteString(`</svg>`)
 	return b.String()
 }

@@ -158,8 +158,10 @@ func (s *Server) handleBanner(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "banner.tmpl", !s.conn.healthy())
 }
 
-// fetchPanel builds the panel view for one graph, fetching the metric's
-// points for the fixed last-hour window from the agent.
+// fetchPanel builds the panel view for one graph, fetching every series'
+// points for the fixed last-hour window from the agent concurrently. Any
+// series fetch failing marks the panel as error; a chart renders when at
+// least one series has data in the window.
 func (s *Server) fetchPanel(ctx context.Context, g config.Graph, interval time.Duration) panelView {
 	view := panelView{
 		Graph:    g,
@@ -169,18 +171,38 @@ func (s *Server) fetchPanel(ctx context.Context, g config.Graph, interval time.D
 	}
 	to := s.now().UTC()
 	from := to.Add(-displayWindow)
-	points, err := s.client.Points(ctx, g.Metric, from, to)
-	if err != nil {
-		s.log.Debug("panel fetch failed", "graph", g.Name, "metric", g.Metric, "error", err)
-		return view
+
+	series := make([]chart.Series, len(g.Metric))
+	errs := make([]error, len(g.Metric))
+	var wg sync.WaitGroup
+	for i, name := range g.Metric {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			points, err := s.client.Points(ctx, name, from, to)
+			series[i] = chart.Series{Name: name, Points: points}
+			errs[i] = err
+		}(i, name)
 	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			s.log.Debug("panel fetch failed", "graph", g.Name, "metric", g.Metric[i], "error", err)
+			return view
+		}
+	}
+
 	window := chart.Options{From: from, To: to}
-	if len(chart.Clip(points, window)) == 0 {
-		view.State = stateNoData
-		return view
+	clipped := chart.Clip(series, window)
+	for _, ser := range clipped {
+		if len(ser.Points) > 0 {
+			view.State = stateChart
+			view.Chart = template.HTML(chart.Render(clipped, window))
+			return view
+		}
 	}
-	view.State = stateChart
-	view.Chart = template.HTML(chart.Render(points, window))
+	view.State = stateNoData
 	return view
 }
 

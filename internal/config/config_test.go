@@ -191,6 +191,199 @@ metrics:
 	}
 }
 
+func TestLoadMetricsMultiValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name: "valid multi with mixed column types",
+			content: `
+metrics:
+  - name: db_stats
+    query: "SELECT 1 AS commits, 2 AS hit_ratio"
+    type: multi
+    columns:
+      commits: counter
+      hit_ratio: gauge
+`,
+		},
+		{
+			name: "multi without columns",
+			content: `
+metrics:
+  - name: db_stats
+    query: "SELECT 1"
+    type: multi
+`,
+			wantErr: `metric "db_stats" of type multi requires a non-empty columns map`,
+		},
+		{
+			name: "multi with empty columns map",
+			content: `
+metrics:
+  - name: db_stats
+    query: "SELECT 1"
+    type: multi
+    columns: {}
+`,
+			wantErr: `metric "db_stats" of type multi requires a non-empty columns map`,
+		},
+		{
+			name: "columns on gauge rejected",
+			content: `
+metrics:
+  - name: plain
+    query: "SELECT 1"
+    type: gauge
+    columns:
+      x: counter
+`,
+			wantErr: `metric "plain": columns is only valid for type multi`,
+		},
+		{
+			name: "columns on counter rejected",
+			content: `
+metrics:
+  - name: plain
+    query: "SELECT 1"
+    type: counter
+    columns:
+      x: gauge
+`,
+			wantErr: `metric "plain": columns is only valid for type multi`,
+		},
+		{
+			name: "unknown column type rejected",
+			content: `
+metrics:
+  - name: db_stats
+    query: "SELECT 1"
+    type: multi
+    columns:
+      commits: counter
+      weird: histogram
+`,
+			wantErr: `metric "db_stats" column "weird" has unknown type "histogram"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTemp(t, tt.content)
+			_, err := LoadMetrics(path)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("LoadMetrics succeeded, want error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Errorf("error = %q, want it to name the file %q", err, path)
+			}
+		})
+	}
+}
+
+func TestLoadMetricsSubSeriesCollisions(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name: "declared metric after multi sub-series",
+			content: `
+metrics:
+  - name: db_stats
+    query: "SELECT 1 AS commits"
+    type: multi
+    columns:
+      commits: counter
+  - name: db_stats.commits
+    query: "SELECT 2"
+    type: gauge
+`,
+			wantErr: `db_stats.commits`,
+		},
+		{
+			name: "declared metric before multi sub-series",
+			content: `
+metrics:
+  - name: db_stats.reads
+    query: "SELECT 2"
+    type: gauge
+  - name: db_stats
+    query: "SELECT 1 AS reads"
+    type: multi
+    columns:
+      reads: counter
+`,
+			wantErr: `db_stats.reads`,
+		},
+		{
+			name: "two multis deriving the same sub-series via dotted columns",
+			content: `
+metrics:
+  - name: a
+    query: "SELECT 1 AS b"
+    type: multi
+    columns:
+      b.c: counter
+  - name: a.b
+    query: "SELECT 1 AS c"
+    type: multi
+    columns:
+      c: gauge
+`,
+			wantErr: `a.b.c`,
+		},
+		{
+			name: "distinct parents with same column name accepted",
+			content: `
+metrics:
+  - name: db_stats
+    query: "SELECT 1 AS commits"
+    type: multi
+    columns:
+      commits: counter
+  - name: table_stats
+    query: "SELECT 1 AS commits"
+    type: multi
+    columns:
+      commits: counter
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTemp(t, tt.content)
+			_, err := LoadMetrics(path)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("LoadMetrics succeeded, want error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Errorf("error = %q, want it to name the file %q", err, path)
+			}
+		})
+	}
+}
+
 func TestEffectiveInterval(t *testing.T) {
 	global := 10 * time.Second
 	noOverride := Metric{Name: "a"}
