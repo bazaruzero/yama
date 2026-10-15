@@ -115,8 +115,8 @@ func okAgent(w http.ResponseWriter, r *http.Request) {
 
 func TestDashboardRendersPanelsInConfigOrder(t *testing.T) {
 	graphs := []config.Graph{
-		{Name: "Zeta", Metric: "m_z", Description: "last panel by config"},
-		{Name: "Alpha", Metric: "m_a", Description: "first panel by config"},
+		{Name: "Zeta", Metric: config.MetricList{"m_z"}, Description: "last panel by config"},
+		{Name: "Alpha", Metric: config.MetricList{"m_a"}, Description: "first panel by config"},
 	}
 	ts := newTestServer(t, okAgent, graphs)
 	page := get(t, ts.URL+"/")
@@ -147,7 +147,7 @@ func TestDashboardEmptyGraphs(t *testing.T) {
 }
 
 func TestDashboardOnlySameOriginAssets(t *testing.T) {
-	ts := newTestServer(t, okAgent, []config.Graph{{Name: "A", Metric: "m"}})
+	ts := newTestServer(t, okAgent, []config.Graph{{Name: "A", Metric: config.MetricList{"m"}}})
 	page := get(t, ts.URL+"/")
 
 	attrRe := regexp.MustCompile(`(?:src|href)="([^"]+)"`)
@@ -165,7 +165,7 @@ func TestDashboardOnlySameOriginAssets(t *testing.T) {
 }
 
 func TestPanelFragmentChart(t *testing.T) {
-	graphs := []config.Graph{{Name: "My Panel", Metric: "m1"}}
+	graphs := []config.Graph{{Name: "My Panel", Metric: config.MetricList{"m1"}}}
 	ts := newTestServer(t, okAgent, graphs)
 
 	frag := get(t, ts.URL+"/panels/My%20Panel")
@@ -185,7 +185,7 @@ func TestPanelFragmentNoData(t *testing.T) {
 		}
 		okAgent(w, r)
 	}
-	ts := newTestServer(t, agentHandler, []config.Graph{{Name: "Empty", Metric: "empty_metric"}, {Name: "Full", Metric: "m"}})
+	ts := newTestServer(t, agentHandler, []config.Graph{{Name: "Empty", Metric: config.MetricList{"empty_metric"}}, {Name: "Full", Metric: config.MetricList{"m"}}})
 
 	frag := get(t, ts.URL+"/panels/Empty")
 	if !strings.Contains(frag, "No data in the last hour") {
@@ -198,7 +198,7 @@ func TestPanelFragmentNoData(t *testing.T) {
 }
 
 func TestUnknownPanelIs404(t *testing.T) {
-	ts := newTestServer(t, okAgent, []config.Graph{{Name: "A", Metric: "m"}})
+	ts := newTestServer(t, okAgent, []config.Graph{{Name: "A", Metric: config.MetricList{"m"}}})
 	resp, err := http.Get(ts.URL + "/panels/Nope")
 	if err != nil {
 		t.Fatal(err)
@@ -206,6 +206,81 @@ func TestUnknownPanelIs404(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestMultiSeriesGraphRendersOnePanel verifies a graph listing several
+// series renders a single panel with one line per series.
+func TestMultiSeriesGraphRendersOnePanel(t *testing.T) {
+	ts := newTestServer(t, okAgent, []config.Graph{
+		{Name: "DB activity", Metric: config.MetricList{"db_stats.commits", "db_stats.reads"}},
+	})
+	page := get(t, ts.URL+"/")
+
+	if got := strings.Count(page, `<path class="line"`); got != 2 {
+		t.Errorf("line paths = %d, want 2 (one per series, one panel):\n%s", got, page)
+	}
+	if strings.Count(page, "<h2>") != 1 {
+		t.Errorf("panels = %d, want 1", strings.Count(page, "<h2>"))
+	}
+	if !strings.Contains(page, "db_stats.commits: 1.00 · db_stats.reads: 1.00") {
+		t.Errorf("missing per-series legend:\n%s", page)
+	}
+}
+
+// TestMultiSeriesGraphWithEmptySeriesStillRenders verifies a series with no
+// data keeps the panel in chart state with the other series drawn.
+func TestMultiSeriesGraphWithEmptySeriesStillRenders(t *testing.T) {
+	agentHandler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "empty_metric") {
+			fmt.Fprint(w, "[]")
+			return
+		}
+		okAgent(w, r)
+	}
+	ts := newTestServer(t, agentHandler, []config.Graph{
+		{Name: "Mixed", Metric: config.MetricList{"m", "empty_metric"}},
+	})
+
+	frag := get(t, ts.URL+"/panels/Mixed")
+	if !strings.Contains(frag, "<svg") {
+		t.Errorf("panel must render a chart when any series has data:\n%s", frag)
+	}
+	if got := strings.Count(frag, `<path class="line"`); got != 1 {
+		t.Errorf("line paths = %d, want 1 (only the populated series):\n%s", got, frag)
+	}
+	if !strings.Contains(frag, "m: 1.00") || !strings.Contains(frag, "empty_metric: —") {
+		t.Errorf("legend must name both series:\n%s", frag)
+	}
+	if strings.Contains(frag, "No data in the last hour") {
+		t.Errorf("panel with partial data must not show the no-data state:\n%s", frag)
+	}
+}
+
+// TestMultiSeriesOneSeriesFailureIsErrorState verifies a failing series
+// fetch (agent error on one name) fails the whole panel, never a
+// half-rendered chart.
+func TestMultiSeriesOneSeriesFailureIsErrorState(t *testing.T) {
+	agentHandler := func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "bad_metric") {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		okAgent(w, r)
+	}
+	ts := newTestServer(t, agentHandler, []config.Graph{
+		{Name: "Frag", Metric: config.MetricList{"m", "bad_metric"}},
+	})
+
+	frag := get(t, ts.URL+"/panels/Frag")
+	if !strings.Contains(frag, "Data unavailable") {
+		t.Errorf("panel must show error state when any series fetch fails:\n%s", frag)
+	}
+	if strings.Contains(frag, "<svg") {
+		t.Errorf("panel must not render a half-chart on partial failure:\n%s", frag)
+	}
+	if banner := get(t, ts.URL+"/banner"); !strings.Contains(banner, "unreachable") {
+		t.Errorf("banner must be down when a series fetch fails:\n%s", banner)
 	}
 }
 
@@ -219,7 +294,7 @@ func TestBannerShowsAndClearsOnAgentFailureAndRecovery(t *testing.T) {
 		}
 		okAgent(w, r)
 	}
-	ts := newTestServer(t, agentHandler, []config.Graph{{Name: "A", Metric: "m"}})
+	ts := newTestServer(t, agentHandler, []config.Graph{{Name: "A", Metric: config.MetricList{"m"}}})
 
 	if frag := get(t, ts.URL+"/panels/A"); !strings.Contains(frag, "<svg") {
 		t.Fatalf("healthy agent: fragment missing chart:\n%s", frag)
@@ -259,7 +334,7 @@ func TestDashboardWithAgentDownStillServesPage(t *testing.T) {
 	port, _ := strconv.Atoi(u.Port())
 
 	cfg := config.SystemConfig{Agent: config.AgentConfig{Host: u.Hostname(), Port: port}}
-	srv, err := NewServer(cfg, []config.Graph{{Name: "A", Metric: "m"}}, agent.NewClient(u.Hostname(), port, 500*time.Millisecond), nil)
+	srv, err := NewServer(cfg, []config.Graph{{Name: "A", Metric: config.MetricList{"m"}}}, agent.NewClient(u.Hostname(), port, 500*time.Millisecond), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

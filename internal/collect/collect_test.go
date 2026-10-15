@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,16 +14,20 @@ import (
 	"github.com/bazaruzero/yama/internal/store"
 )
 
-// fakeQuerier returns scripted results for QueryValue. When sleep is set it
-// holds each call for that duration, tracking concurrent executions.
+// fakeQuerier returns scripted results for QueryValue and QueryRow. When
+// sleep is set it holds each call for that duration, tracking concurrent
+// executions.
 type fakeQuerier struct {
-	mu     sync.Mutex
-	value  float64
-	err    error
-	calls  int
-	sleep  time.Duration
-	active int64
-	maxAct int64
+	mu        sync.Mutex
+	value     float64
+	err       error
+	calls     int
+	rowResult map[string]float64
+	rowErr    error
+	rowCalls  int
+	sleep     time.Duration
+	active    int64
+	maxAct    int64
 }
 
 func (f *fakeQuerier) QueryValue(ctx context.Context, _ string) (float64, error) {
@@ -49,10 +54,42 @@ func (f *fakeQuerier) QueryValue(ctx context.Context, _ string) (float64, error)
 	return f.value, f.err
 }
 
+// QueryRow serves the fake multi-metric result. It shares the call
+// accounting with QueryValue so concurrency tests see both paths.
+func (f *fakeQuerier) QueryRow(ctx context.Context, _ string) (map[string]float64, error) {
+	cur := atomic.AddInt64(&f.active, 1)
+	for {
+		max := atomic.LoadInt64(&f.maxAct)
+		if cur <= max || atomic.CompareAndSwapInt64(&f.maxAct, max, cur) {
+			break
+		}
+	}
+	defer atomic.AddInt64(&f.active, -1)
+	if f.sleep > 0 {
+		timer := time.NewTimer(f.sleep)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	f.rowCalls++
+	f.mu.Unlock()
+	return f.rowResult, f.rowErr
+}
+
 func (f *fakeQuerier) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls
+}
+
+func (f *fakeQuerier) rowCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rowCalls
 }
 
 func (f *fakeQuerier) maxConcurrent() int {
@@ -63,6 +100,172 @@ func metric(name string, typ config.MetricType) config.Metric {
 	return config.Metric{Name: name, Query: "SELECT 1", Type: typ}
 }
 
+// TestCollectOnceMulti verifies the multi-metric explosion: one query, one
+// point per declared column, named <metric>.<column>, typed per the column
+// declaration, all sharing the exact passed timestamp.
+func TestCollectOnceMulti(t *testing.T) {
+	ts := time.Date(2026, 10, 15, 12, 0, 0, 123456789, time.UTC)
+	multi := config.Metric{
+		Name:  "db_stats",
+		Query: "SELECT 1 AS commits, 2.5 AS hit_ratio",
+		Type:  config.MetricTypeMulti,
+		Columns: map[string]config.MetricType{
+			"commits":   config.MetricTypeCounter,
+			"hit_ratio": config.MetricTypeGauge,
+		},
+	}
+
+	tests := []struct {
+		name    string
+		row     map[string]float64
+		rowErr  error
+		wantErr string
+		wantPts map[string]store.Point
+	}{
+		{
+			name: "successful explosion",
+			row:  map[string]float64{"commits": 1, "hit_ratio": 2.5},
+			wantPts: map[string]store.Point{
+				"db_stats.commits":   {Name: "db_stats.commits", Type: "counter", Value: 1, Timestamp: ts},
+				"db_stats.hit_ratio": {Name: "db_stats.hit_ratio", Type: "gauge", Value: 2.5, Timestamp: ts},
+			},
+		},
+		{
+			name:    "extra returned column fails",
+			row:     map[string]float64{"commits": 1, "hit_ratio": 2.5, "extra": 3},
+			wantErr: "column mismatch",
+		},
+		{
+			name:    "missing declared column fails",
+			row:     map[string]float64{"commits": 1},
+			wantErr: "column mismatch",
+		},
+		{
+			name:    "query error propagates with metric name",
+			rowErr:  errors.New("boom"),
+			wantErr: `metric "db_stats"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st, err := store.OpenBadgerInMemory()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+
+			q := &fakeQuerier{rowResult: tt.row, rowErr: tt.rowErr}
+			c := NewCollector(q, st, time.Second)
+
+			err = c.CollectOnce(context.Background(), multi, ts)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("CollectOnce succeeded, want error containing %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %q, want it to contain %q", err, tt.wantErr)
+				}
+			}
+
+			// On failure no points at all; on success exactly the wanted set.
+			for name, want := range tt.wantPts {
+				pts, err := st.Query(name, ts.Add(-time.Minute), ts.Add(time.Minute))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(pts) != 1 {
+					t.Fatalf("sub-series %q: got %d points, want 1", name, len(pts))
+				}
+				got := pts[0]
+				if got.Type != want.Type || got.Value != want.Value || !got.Timestamp.Equal(want.Timestamp) {
+					t.Errorf("sub-series %q = %+v, want %+v", name, got, want)
+				}
+			}
+			if tt.wantErr != "" {
+				for _, name := range []string{"db_stats.commits", "db_stats.hit_ratio"} {
+					pts, err := st.Query(name, ts.Add(-time.Minute), ts.Add(time.Minute))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(pts) != 0 {
+						t.Errorf("failed run stored %d points for %q, want 0", len(pts), name)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestSchedulerMultiOneQueryPerCycle verifies a multi metric is one
+// scheduled job: one query per due cycle, no QueryValue calls, and each
+// cycle's sub-series points share one timestamp.
+func TestSchedulerMultiOneQueryPerCycle(t *testing.T) {
+	st, err := store.OpenBadgerInMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	q := &fakeQuerier{rowResult: map[string]float64{"commits": 1, "reads": 2}}
+	c := NewCollector(q, st, time.Second)
+	m := config.Metric{
+		Name:     "db_stats",
+		Query:    "SELECT 1 AS commits, 2 AS reads",
+		Type:     config.MetricTypeMulti,
+		Interval: config.Duration{Duration: 60 * time.Millisecond},
+		Columns: map[string]config.MetricType{
+			"commits": config.MetricTypeCounter,
+			"reads":   config.MetricTypeCounter,
+		},
+	}
+
+	s := NewScheduler(c, []config.Metric{m}, time.Second, 1, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	s.Run(ctx)
+
+	if n := q.rowCallCount(); n < 3 {
+		t.Errorf("multi metric queried %d times in 300ms, want >= 3", n)
+	}
+	if n := q.callCount(); n != 0 {
+		t.Errorf("QueryValue called %d times for a multi metric, want 0", n)
+	}
+
+	counts := map[string]int{}
+	for _, name := range []string{"db_stats.commits", "db_stats.reads"} {
+		pts, err := st.Query(name, time.Now().Add(-time.Hour), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pts) == 0 {
+			t.Fatalf("sub-series %q produced no points", name)
+		}
+		counts[name] = len(pts)
+	}
+	if counts["db_stats.commits"] != counts["db_stats.reads"] {
+		t.Errorf("sub-series point counts differ: commits=%d reads=%d", counts["db_stats.commits"], counts["db_stats.reads"])
+	}
+
+	// Every cycle's points share one timestamp across both sub-series.
+	commits, _ := st.Query("db_stats.commits", time.Now().Add(-time.Hour), time.Now())
+	reads, _ := st.Query("db_stats.reads", time.Now().Add(-time.Hour), time.Now())
+	seen := map[string]int{}
+	for _, p := range commits {
+		seen[p.Timestamp.Format(time.RFC3339Nano)]++
+	}
+	for _, p := range reads {
+		key := p.Timestamp.Format(time.RFC3339Nano)
+		if seen[key] == 0 {
+			t.Errorf("reads has timestamp %v with no matching commits point (cycle timestamps must be shared)", p.Timestamp)
+		}
+	}
+}
+
+// TestCollectOnceSuccess verifies a single-value metric stores one point.
 func TestCollectOnceSuccess(t *testing.T) {
 	st, err := store.OpenBadgerInMemory()
 	if err != nil {

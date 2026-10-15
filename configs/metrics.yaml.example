@@ -8,3 +8,15 @@ metrics:
     # interval: 5s      # optional per-metric override of collector.interval
     # query_timeout: 30s  # optional per-metric override of collector.query_timeout (must not exceed effective interval)
     # enabled: false    # optional; default is enabled
+
+  # A multi metric runs one query returning one row with several numeric
+  # columns; each column becomes its own series named <metric>.<column>,
+  # typed per the columns map. The query's returned columns must exactly
+  # match the declared set — a mismatch fails that run (logged) and later
+  # runs continue.
+  # - name: db_stats
+  #   query: "SELECT xact_commit AS commits, blks_read AS reads FROM pg_stat_database WHERE datname = current_database()"
+  #   type: multi
+  #   columns:
+  #     commits: counter
+  #     reads: counter

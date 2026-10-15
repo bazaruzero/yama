@@ -1,7 +1,13 @@
 # Graphs configuration — copy to graphs.yaml and edit.
 # One dashboard panel per graph: name is the panel title, metric is the
 # metric name from the agent's metrics.yaml, description is optional.
+# metric accepts a single name or a list of names (any series mixable,
+# including multi-metric sub-series like db_stats.commits); a graph with
+# several metrics renders one panel with one line per series.
 graphs:
   - name: "Connectivity"
     metric: select_1
     description: "SELECT 1 connectivity check against the monitored database"
+  # - name: "Database activity"
+  #   metric: [db_stats.commits, db_stats.reads]
+  #   description: "two series from one multi-metric query in one panel"

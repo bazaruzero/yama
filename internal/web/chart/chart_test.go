@@ -2,6 +2,7 @@ package chart
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,19 +24,31 @@ func TestRenderEmpty(t *testing.T) {
 	if got := Render(nil, Options{From: winFrom, To: winTo}); got != "" {
 		t.Errorf("Render(nil) = %q, want empty string", got)
 	}
-	if got := Render([]agent.Point{{Timestamp: winFrom.Add(-time.Hour), Value: 1}}, Options{From: winFrom, To: winTo}); got != "" {
+	empty := []Series{{Name: "a", Points: nil}}
+	if got := Render(empty, Options{From: winFrom, To: winTo}); got != "" {
+		t.Errorf("Render(no points) = %q, want empty string", got)
+	}
+	out := []Series{{Name: "a", Points: []agent.Point{{Timestamp: winFrom.Add(-time.Hour), Value: 1}}}}
+	if got := Render(out, Options{From: winFrom, To: winTo}); got != "" {
 		t.Errorf("Render(out-of-window) = %q, want empty string", got)
+	}
+	allEmpty := []Series{
+		{Name: "a", Points: []agent.Point{{Timestamp: winFrom.Add(-time.Hour), Value: 1}}},
+		{Name: "b", Points: nil},
+	}
+	if got := Render(allEmpty, Options{From: winFrom, To: winTo}); got != "" {
+		t.Errorf("Render(all-series-empty) = %q, want empty string", got)
 	}
 }
 
 func TestRenderExcludesOutOfWindowPoints(t *testing.T) {
-	points := []agent.Point{
+	series := []Series{{Name: "m", Points: []agent.Point{
 		{Timestamp: winFrom.Add(-10 * time.Minute), Value: 99}, // before window
 		{Timestamp: at(10, 0), Value: 1},
 		{Timestamp: at(20, 0), Value: 2},
 		{Timestamp: winTo.Add(time.Minute), Value: 98}, // after window
-	}
-	got := Render(points, Options{From: winFrom, To: winTo})
+	}}}
+	got := Render(series, Options{From: winFrom, To: winTo})
 	if strings.Count(got, "<circle") != 2 {
 		t.Errorf("circles = %d, want 2 (out-of-window points must be excluded)\n%s", strings.Count(got, "<circle"), got)
 	}
@@ -45,7 +58,8 @@ func TestRenderExcludesOutOfWindowPoints(t *testing.T) {
 }
 
 func TestRenderSinglePoint(t *testing.T) {
-	got := Render([]agent.Point{{Timestamp: at(30, 0), Value: 1}}, Options{From: winFrom, To: winTo})
+	series := []Series{{Name: "m", Points: []agent.Point{{Timestamp: at(30, 0), Value: 1}}}}
+	got := Render(series, Options{From: winFrom, To: winTo})
 	if !strings.Contains(got, "<svg") {
 		t.Errorf("missing svg element")
 	}
@@ -58,12 +72,12 @@ func TestRenderSinglePoint(t *testing.T) {
 }
 
 func TestRenderFlatSeries(t *testing.T) {
-	points := []agent.Point{
+	series := []Series{{Name: "m", Points: []agent.Point{
 		{Timestamp: at(10, 0), Value: 5},
 		{Timestamp: at(20, 0), Value: 5},
 		{Timestamp: at(30, 0), Value: 5},
-	}
-	got := Render(points, Options{From: winFrom, To: winTo})
+	}}}
+	got := Render(series, Options{From: winFrom, To: winTo})
 	if !strings.Contains(got, `<path class="line"`) {
 		t.Errorf("missing line path")
 	}
@@ -76,12 +90,12 @@ func TestRenderFlatSeries(t *testing.T) {
 }
 
 func TestRenderLineIsSmoothedWithRoundJoins(t *testing.T) {
-	points := []agent.Point{
+	series := []Series{{Name: "m", Points: []agent.Point{
 		{Timestamp: at(0, 0), Value: 0},
 		{Timestamp: at(30, 0), Value: 5},
 		{Timestamp: at(59, 0), Value: 1},
-	}
-	got := Render(points, Options{From: winFrom, To: winTo})
+	}}}
+	got := Render(series, Options{From: winFrom, To: winTo})
 	if !strings.Contains(got, `stroke-linejoin="round"`) || !strings.Contains(got, `stroke-linecap="round"`) {
 		t.Errorf("line missing round join/cap attributes:\n%s", got)
 	}
@@ -90,6 +104,105 @@ func TestRenderLineIsSmoothedWithRoundJoins(t *testing.T) {
 	}
 	if strings.Contains(got, "polyline") {
 		t.Errorf("sharp polyline must not be used:\n%s", got)
+	}
+}
+
+// TestRenderMultiSeries verifies one path per series with distinct palette
+// colors, a per-series legend, and a shared y-domain across all series.
+func TestRenderMultiSeries(t *testing.T) {
+	series := []Series{
+		{Name: "commits", Points: []agent.Point{
+			{Timestamp: at(0, 0), Value: 0},
+			{Timestamp: at(30, 0), Value: 4},
+		}},
+		{Name: "reads", Points: []agent.Point{
+			{Timestamp: at(0, 0), Value: 1},
+			{Timestamp: at(30, 0), Value: 9},
+		}},
+	}
+	got := Render(series, Options{From: winFrom, To: winTo})
+
+	if n := strings.Count(got, `<path class="line"`); n != 2 {
+		t.Errorf("line paths = %d, want 2:\n%s", n, got)
+	}
+
+	// Two distinct stroke colors via inline styles.
+	strokes := regexp.MustCompile(`style="stroke:([^"]+)"`).FindAllStringSubmatch(got, -1)
+	if len(strokes) != 2 {
+		t.Fatalf("stroke styles = %d, want 2:\n%s", len(strokes), got)
+	}
+	if strokes[0][1] == strokes[1][1] {
+		t.Errorf("series share stroke color %s", strokes[0][1])
+	}
+	if strokes[0][1] != palette[0] || strokes[1][1] != palette[1] {
+		t.Errorf("strokes = [%s, %s], want palette order [%s, %s]", strokes[0][1], strokes[1][1], palette[0], palette[1])
+	}
+
+	// Dots carry matching fills.
+	fills := regexp.MustCompile(`style="fill:([^"]+)"`).FindAllStringSubmatch(got, -1)
+	if len(fills) != 4 {
+		t.Errorf("dot fills = %d, want 4 (one per point):\n%s", len(fills), got)
+	}
+
+	// Per-series legend: name + current value for each series.
+	if !strings.Contains(got, "commits: 4.00 · reads: 9.00") {
+		t.Errorf("missing per-series legend:\n%s", got)
+	}
+	if strings.Contains(got, "min ") && strings.Contains(got, "max ") {
+		t.Errorf("multi-series legend must not be min/max/current:\n%s", got)
+	}
+
+	// Shared y-domain spans both series: max 9 with 10% pad gives ymax 9.9.
+	if !strings.Contains(got, ">9.90<") {
+		t.Errorf("y axis does not span both series (want top label 9.90):\n%s", got)
+	}
+}
+
+// TestRenderMultiSeriesWithEmptySeries verifies a series with no in-window
+// points draws no path but still appears in the legend.
+func TestRenderMultiSeriesWithEmptySeries(t *testing.T) {
+	series := []Series{
+		{Name: "alive", Points: []agent.Point{
+			{Timestamp: at(10, 0), Value: 2},
+		}},
+		{Name: "dead", Points: nil},
+	}
+	got := Render(series, Options{From: winFrom, To: winTo})
+
+	if n := strings.Count(got, `<path class="line"`); n != 1 {
+		t.Errorf("line paths = %d, want 1 (empty series draws nothing):\n%s", n, got)
+	}
+	if !strings.Contains(got, "alive: 2.00") {
+		t.Errorf("missing legend for populated series:\n%s", got)
+	}
+	if !strings.Contains(got, "dead: —") {
+		t.Errorf("missing legend entry for empty series:\n%s", got)
+	}
+}
+
+// TestRenderPaletteCycles verifies the palette repeats after six series.
+func TestRenderPaletteCycles(t *testing.T) {
+	var series []Series
+	for i := 0; i < 7; i++ {
+		series = append(series, Series{
+			Name:   fmt.Sprintf("s%d", i),
+			Points: []agent.Point{{Timestamp: at(10, 0), Value: float64(i)}},
+		})
+	}
+	got := Render(series, Options{From: winFrom, To: winTo})
+	strokes := regexp.MustCompile(`style="stroke:([^"]+)"`).FindAllStringSubmatch(got, -1)
+	if len(strokes) != 7 {
+		t.Fatalf("stroke styles = %d, want 7:\n%s", len(strokes), got)
+	}
+	if strokes[0][1] != strokes[6][1] {
+		t.Errorf("series 0 and 6 should share a color (palette cycles): %s vs %s", strokes[0][1], strokes[6][1])
+	}
+	uniq := map[string]bool{}
+	for _, s := range strokes {
+		uniq[s[1]] = true
+	}
+	if len(uniq) != 6 {
+		t.Errorf("distinct colors = %d, want 6", len(uniq))
 	}
 }
 
@@ -143,15 +256,20 @@ func TestSmoothPathSkipsDuplicateX(t *testing.T) {
 }
 
 func TestRenderLegendAxesAndScaling(t *testing.T) {
-	points := []agent.Point{
+	series := []Series{{Name: "m", Points: []agent.Point{
 		{Timestamp: at(0, 0), Value: 0},
 		{Timestamp: at(30, 0), Value: 5},
 		{Timestamp: at(59, 0), Value: 1},
-	}
-	got := Render(points, Options{From: winFrom, To: winTo})
+	}}}
+	got := Render(series, Options{From: winFrom, To: winTo})
 
 	if !strings.Contains(got, "min 0.00 · max 5.00 · current 1.00") {
 		t.Errorf("missing min/max/current legend:\n%s", got)
+	}
+
+	// Single series must not carry inline color overrides (CSS accent look).
+	if strings.Contains(got, `style="stroke:`) || strings.Contains(got, `style="fill:`) {
+		t.Errorf("single-series chart must keep the stylesheet accent, no inline colors:\n%s", got)
 	}
 
 	// Value padding of 10% gives the y domain [-0.5, 5.5]; the five axis

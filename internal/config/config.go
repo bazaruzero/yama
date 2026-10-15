@@ -120,22 +120,25 @@ func LoadAgent(path string) (*AgentConfig, error) {
 	return &cfg, nil
 }
 
-// MetricType is the kind of a metric: counter (cumulative) or gauge (point value).
+// MetricType is the kind of a metric: counter (cumulative), gauge (point
+// value), or multi (one query producing several named columns).
 type MetricType string
 
 const (
 	MetricTypeCounter MetricType = "counter"
 	MetricTypeGauge   MetricType = "gauge"
+	MetricTypeMulti   MetricType = "multi"
 )
 
 // Metric is a single metric definition from the metrics configuration file.
 type Metric struct {
-	Name         string     `yaml:"name"`
-	Query        string     `yaml:"query"`
-	Type         MetricType `yaml:"type"`
-	Enabled      *bool      `yaml:"enabled"`
-	Interval     Duration   `yaml:"interval"`
-	QueryTimeout Duration   `yaml:"query_timeout"`
+	Name         string                `yaml:"name"`
+	Query        string                `yaml:"query"`
+	Type         MetricType            `yaml:"type"`
+	Columns      map[string]MetricType `yaml:"columns"`
+	Enabled      *bool                 `yaml:"enabled"`
+	Interval     Duration              `yaml:"interval"`
+	QueryTimeout Duration              `yaml:"query_timeout"`
 }
 
 // IsEnabled reports whether the metric should be collected (default true).
@@ -218,11 +221,37 @@ func LoadMetrics(path string) (*MetricsConfig, error) {
 		}
 		switch m.Type {
 		case MetricTypeCounter, MetricTypeGauge:
+			if m.Columns != nil {
+				return nil, fmt.Errorf("metrics config %q: metric %q: columns is only valid for type multi", path, m.Name)
+			}
+		case MetricTypeMulti:
+			if len(m.Columns) == 0 {
+				return nil, fmt.Errorf("metrics config %q: metric %q of type multi requires a non-empty columns map", path, m.Name)
+			}
+			for col, colType := range m.Columns {
+				if colType != MetricTypeCounter && colType != MetricTypeGauge {
+					return nil, fmt.Errorf("metrics config %q: metric %q column %q has unknown type %q (must be counter or gauge)", path, m.Name, col, colType)
+				}
+			}
 		default:
-			return nil, fmt.Errorf("metrics config %q: metric %q has unknown type %q (must be counter or gauge)", path, m.Name, m.Type)
+			return nil, fmt.Errorf("metrics config %q: metric %q has unknown type %q (must be counter, gauge, or multi)", path, m.Name, m.Type)
 		}
 		if m.QueryTimeout.Duration < 0 {
 			return nil, fmt.Errorf("metrics config %q: metric %q has negative query_timeout %s", path, m.Name, m.QueryTimeout.Duration)
+		}
+	}
+	// Sub-series names derived from multi metrics (<parent>.<column>) must
+	// not collide with any declared metric name or other sub-series name.
+	for _, m := range cfg.Metrics {
+		if m.Type != MetricTypeMulti {
+			continue
+		}
+		for col := range m.Columns {
+			sub := m.Name + "." + col
+			if seen[sub] {
+				return nil, fmt.Errorf("metrics config %q: metric or sub-series name %q collides with another configured metric", path, sub)
+			}
+			seen[sub] = true
 		}
 	}
 	return &cfg, nil

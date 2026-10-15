@@ -97,6 +97,71 @@ func (p *Pool) QueryValue(ctx context.Context, query string) (float64, error) {
 	return values[0], nil
 }
 
+// QueryRow executes a multi-metric query and returns its single row as a
+// map of column name to numeric value. The query MUST return exactly one
+// row with one or more columns, all numeric; anything else is an error.
+func (p *Pool) QueryRow(ctx context.Context, query string) (map[string]float64, error) {
+	rows, err := p.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	fields := rows.FieldDescriptions()
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("query must return at least 1 column, got 0")
+	}
+	names := make([]string, len(fields))
+	for i, f := range fields {
+		names[i] = f.Name
+	}
+	var result map[string]float64
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+		if rowCount > 1 {
+			return nil, fmt.Errorf("query must return exactly 1 row, got more")
+		}
+		raws := make([]any, len(fields))
+		ptrs := make([]any, len(fields))
+		for i := range raws {
+			ptrs[i] = &raws[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("scan result: %w", err)
+		}
+		result, err = buildRowMap(names, raws)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	if rowCount != 1 {
+		return nil, fmt.Errorf("query must return exactly 1 row, got %d", rowCount)
+	}
+	return result, nil
+}
+
+// buildRowMap converts one row's raw values to a column-name-keyed float64
+// map. Column names and values must be the same length; every value must
+// be numeric, with errors naming the offending column.
+func buildRowMap(names []string, raws []any) (map[string]float64, error) {
+	if len(names) != len(raws) {
+		return nil, fmt.Errorf("row has %d column names but %d values: mismatch", len(names), len(raws))
+	}
+	out := make(map[string]float64, len(names))
+	for i, raw := range raws {
+		v, err := toFloat64(raw)
+		if err != nil {
+			return nil, fmt.Errorf("column %q: %w", names[i], err)
+		}
+		out[names[i]] = v
+	}
+	return out, nil
+}
+
 // toFloat64 converts common PostgreSQL numeric representations to float64.
 func toFloat64(raw any) (float64, error) {
 	switch v := raw.(type) {

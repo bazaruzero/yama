@@ -152,11 +152,70 @@ graphs:
 		t.Fatalf("graphs = %d, want 2", len(cfg.Graphs))
 	}
 	g := cfg.Graphs[0]
-	if g.Name != "Connectivity" || g.Metric != "select_1" || g.Description != "SELECT 1 check" {
+	if g.Name != "Connectivity" || len(g.Metric) != 1 || g.Metric[0] != "select_1" || g.Description != "SELECT 1 check" {
 		t.Errorf("graph[0] = %+v", g)
 	}
 	if cfg.Graphs[1].Description != "" {
 		t.Errorf("graph[1].description = %q, want empty default", cfg.Graphs[1].Description)
+	}
+}
+
+func TestLoadGraphsMetricList(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+	}{
+		{
+			name: "list of two preserves order",
+			content: `
+graphs:
+  - name: "DB"
+    metric: [db_stats.commits, db_stats.reads]
+`,
+			want: []string{"db_stats.commits", "db_stats.reads"},
+		},
+		{
+			name: "single-entry list behaves like scalar",
+			content: `
+graphs:
+  - name: "DB"
+    metric: [select_1]
+`,
+			want: []string{"select_1"},
+		},
+		{
+			name: "mixed series freely",
+			content: `
+graphs:
+  - name: "Mixed"
+    metric:
+      - db_stats.commits
+      - uptime_seconds
+`,
+			want: []string{"db_stats.commits", "uptime_seconds"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, "graphs.yaml", tt.content)
+			cfg, err := LoadGraphs(path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(cfg.Graphs) != 1 {
+				t.Fatalf("graphs = %d, want 1", len(cfg.Graphs))
+			}
+			got := cfg.Graphs[0].Metric
+			if len(got) != len(tt.want) {
+				t.Fatalf("metric = %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("metric[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
@@ -185,6 +244,36 @@ func TestLoadGraphsRejections(t *testing.T) {
 			name:    "unknown field",
 			content: "graphs:\n  - name: A\n    metric: m1\n    unit: q\n",
 			wantErr: "unit",
+		},
+		{
+			name:    "empty metric list",
+			content: "graphs:\n  - name: A\n    metric: []\n",
+			wantErr: `graph "A" is missing a metric`,
+		},
+		{
+			name:    "duplicate metric entries",
+			content: "graphs:\n  - name: A\n    metric: [m1, m1]\n",
+			wantErr: `graph "A" has duplicate metric name "m1"`,
+		},
+		{
+			name:    "metric mapping rejected",
+			content: "graphs:\n  - name: A\n    metric: {a: b}\n",
+			wantErr: "must be a string or a list of strings",
+		},
+		{
+			name:    "non-string list entry rejected",
+			content: "graphs:\n  - name: A\n    metric: [1]\n",
+			wantErr: "must be a string",
+		},
+		{
+			name:    "empty scalar metric",
+			content: "graphs:\n  - name: A\n    metric: \"\"\n",
+			wantErr: `graph "A" has an empty metric name`,
+		},
+		{
+			name:    "empty entry in list",
+			content: "graphs:\n  - name: A\n    metric: [m1, \"\"]\n",
+			wantErr: `graph "A" has an empty metric name`,
 		},
 	}
 	for _, tt := range tests {
